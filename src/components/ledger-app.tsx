@@ -36,8 +36,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  CATEGORIES,
   STORAGE_KEY,
+  categoryInfo,
+  categoryLabelKey,
+  categoryOptions,
   convertedMinor,
   currencyFlag,
   currencyName,
@@ -51,6 +53,7 @@ import {
   totals,
   validSnapshot,
   type Category,
+  type CustomCategory,
   type Ledger,
   type RateSnapshot,
   type Transaction,
@@ -61,6 +64,8 @@ import {
   parseLedgerState,
   type LedgerState,
 } from "@/lib/ledger-sync";
+import { periodTransactions, type PeriodMode } from "@/lib/ledger-analytics";
+import LedgerCharts from "./ledger-charts";
 
 type Tab = "home" | "transactions" | "settings";
 const navigation: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -153,8 +158,14 @@ function Modal({
   );
 }
 
-function CategoryIcon({ category }: { category: Category }) {
-  const data = CATEGORIES[category];
+function CategoryIcon({
+  category,
+  customCategories,
+}: {
+  category: Category;
+  customCategories: CustomCategory[];
+}) {
+  const data = categoryInfo(category, customCategories);
   const Icon = categoryIcons[data.icon];
   return (
     <span className={`category-icon category-${category}`}>
@@ -163,14 +174,88 @@ function CategoryIcon({ category }: { category: Category }) {
   );
 }
 
+function CategoryCreator({
+  onAdd,
+  close,
+}: {
+  onAdd: (label: string) => Promise<string>;
+  close: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const add = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await onAdd(name);
+      close();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "카테고리를 추가하지 못했어요.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="category-creator">
+      <label className="form-field">
+        새 카테고리 이름
+        <input
+          value={name}
+          maxLength={30}
+          placeholder="예: 건강, 여행, 반려동물"
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              if (!saving && name.trim()) void add();
+            }
+          }}
+        />
+      </label>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="category-creator-actions">
+        <button
+          type="button"
+          className="button button-soft"
+          disabled={saving}
+          onClick={close}
+        >
+          취소
+        </button>
+        <button
+          type="button"
+          className="button button-primary"
+          disabled={saving || !name.trim()}
+          onClick={() => void add()}
+        >
+          {saving ? "추가 중…" : "추가하기"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TransactionEditor({
   transaction,
   currencies,
+  customCategories,
+  onAddCategory,
   onSave,
   close,
 }: {
   transaction: Transaction | null;
   currencies: string[];
+  customCategories: CustomCategory[];
+  onAddCategory: (label: string) => Promise<string>;
   onSave: (transaction: Transaction) => Promise<void>;
   close: () => void;
 }) {
@@ -198,6 +283,7 @@ function TransactionEditor({
   const [saving, setSaving] = useState(false);
   const [rateError, setRateError] = useState("");
   const [error, setError] = useState("");
+  const [addingCategory, setAddingCategory] = useState(false);
   const [manual, setManual] = useState(false);
   const [manualRate, setManualRate] = useState("");
   const [draftId] = useState(
@@ -416,19 +502,38 @@ function TransactionEditor({
               value={category}
               onChange={(event) => setCategory(event.target.value as Category)}
             >
-              {Object.entries(CATEGORIES)
-                .filter(([key]) =>
+              {categoryOptions(customCategories)
+                .filter(({ id: key }) =>
                   type === "income"
-                    ? ["salary", "other"].includes(key)
+                    ? ["salary", "other"].includes(key) ||
+                      key.startsWith("custom-")
                     : key !== "salary",
                 )
-                .map(([key, data]) => (
-                  <option key={key} value={key}>
+                .map((data) => (
+                  <option key={data.id} value={data.id}>
                     {data.label}
                   </option>
                 ))}
             </select>
           </label>
+          {addingCategory ? (
+            <CategoryCreator
+              onAdd={async (name) => {
+                const id = await onAddCategory(name);
+                setCategory(id);
+                return id;
+              }}
+              close={() => setAddingCategory(false)}
+            />
+          ) : (
+            <button
+              className="text-button add-category-button"
+              type="button"
+              onClick={() => setAddingCategory(true)}
+            >
+              <Plus size={18} /> 카테고리 추가
+            </button>
+          )}
           <label className="form-field">
             거래 날짜
             <input
@@ -520,7 +625,7 @@ function TransactionEditor({
         )}
         <button
           className="button button-primary full-width save-button"
-          disabled={saving || (loading && !manual)}
+          disabled={saving || addingCategory || (loading && !manual)}
           type="submit"
         >
           {saving ? "저장 중…" : transaction ? "수정하기" : "저장하기"}
@@ -533,11 +638,13 @@ function TransactionEditor({
 function TransactionRows({
   transactions,
   currency,
+  customCategories,
   onSelect,
   emptyText = "아직 내역이 없어요",
 }: {
   transactions: Transaction[];
   currency: string;
+  customCategories: CustomCategory[];
   onSelect: (transaction: Transaction) => void;
   emptyText?: string;
 }) {
@@ -552,13 +659,16 @@ function TransactionRows({
             key={transaction.id}
             onClick={() => onSelect(transaction)}
           >
-            <CategoryIcon category={transaction.category} />
+            <CategoryIcon
+              category={transaction.category}
+              customCategories={customCategories}
+            />
             <span className="transaction-info">
               <strong>{transaction.title}</strong>
               <span>
                 {Number(transaction.date.slice(5, 7))}.
                 {transaction.date.slice(8)} ·{" "}
-                {CATEGORIES[transaction.category].label}
+                {categoryInfo(transaction.category, customCategories).label}
               </span>
             </span>
             <span
@@ -587,12 +697,14 @@ function TransactionRows({
 function TransactionDetail({
   transaction,
   currency,
+  customCategories,
   close,
   edit,
   remove,
 }: {
   transaction: Transaction;
   currency: string;
+  customCategories: CustomCategory[];
   close: () => void;
   edit: () => void;
   remove: () => Promise<void>;
@@ -630,7 +742,7 @@ function TransactionDetail({
         </div>
         <div>
           <dt>카테고리</dt>
-          <dd>{CATEGORIES[transaction.category].label}</dd>
+          <dd>{categoryInfo(transaction.category, customCategories).label}</dd>
         </div>
         <div>
           <dt>날짜</dt>
@@ -732,6 +844,7 @@ function Settings({
   logout,
   loggingOut,
   saving,
+  onAddCategory,
 }: {
   ledger: Ledger;
   commit: (ledger: Ledger) => Promise<void>;
@@ -743,8 +856,10 @@ function Settings({
   logout: () => void;
   loggingOut: boolean;
   saving: boolean;
+  onAddCategory: (label: string) => Promise<string>;
 }) {
   const [adding, setAdding] = useState(false);
+  const [addingCategory, setAddingCategory] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const available = Intl.supportedValuesOf("currency").filter(
@@ -762,6 +877,34 @@ function Settings({
           {error}
         </p>
       )}
+      <section className="settings-section">
+        <div className="section-heading">
+          <h2>카테고리</h2>
+          {!addingCategory && (
+            <button
+              className="text-button"
+              disabled={saving}
+              onClick={() => setAddingCategory(true)}
+            >
+              <Plus size={18} /> 추가
+            </button>
+          )}
+        </div>
+        <p className="section-description">
+          추가한 카테고리는 수입·지출 모두에 사용할 수 있어요.
+        </p>
+        <div className="category-tags">
+          {categoryOptions(ledger.customCategories).map((category) => (
+            <span key={category.id}>{category.label}</span>
+          ))}
+        </div>
+        {addingCategory && (
+          <CategoryCreator
+            onAdd={onAddCategory}
+            close={() => setAddingCategory(false)}
+          />
+        )}
+      </section>
       <section className="settings-section">
         <div className="section-heading">
           <h2>통화별 잔액</h2>
@@ -989,6 +1132,8 @@ export default function LedgerApp() {
   const [migrationError, setMigrationError] = useState("");
   const [tab, setTab] = useState<Tab>("home");
   const [month, setMonth] = useState(monthKey);
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("month");
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [editor, setEditor] = useState<Transaction | null | undefined>();
   const [detail, setDetail] = useState<Transaction | null>(null);
   const [toast, setToast] = useState("");
@@ -1102,16 +1247,9 @@ export default function LedgerApp() {
       setSaving(false);
     }
   };
-  const monthly = useMemo(
-    () =>
-      (ledger?.transactions ?? [])
-        .filter((item) => item.date.startsWith(month))
-        .sort(
-          (a, b) =>
-            b.date.localeCompare(a.date) ||
-            b.createdAt.localeCompare(a.createdAt),
-        ),
-    [ledger, month],
+  const period = useMemo(
+    () => periodTransactions(ledger?.transactions ?? [], month, periodMode),
+    [ledger, month, periodMode],
   );
   if (!ledger)
     return (
@@ -1130,13 +1268,17 @@ export default function LedgerApp() {
       </main>
     );
   const currency = ledger.displayCurrency;
-  const summary = totals(monthly, currency);
-  const filtered = monthly.filter(
+  const summary = totals(period, currency);
+  const matching = period.filter(
     (item) =>
-      (filter === "all" || item.type === filter) &&
-      `${item.title} ${item.note} ${item.currency} ${CATEGORIES[item.category].label}`
+      (!selectedCategories.length ||
+        selectedCategories.includes(item.category)) &&
+      `${item.title} ${item.note} ${item.currency} ${categoryInfo(item.category, ledger.customCategories).label}`
         .toLowerCase()
         .includes(query.toLowerCase()),
+  );
+  const filtered = matching.filter(
+    (item) => filter === "all" || item.type === filter,
   );
   const navigate = (next: Tab) => {
     setTab(next);
@@ -1160,6 +1302,24 @@ export default function LedgerApp() {
     await commit({ ...ledger, transactions });
     setMonth(transaction.date.slice(0, 7));
     setToast(editor ? "수정했어요" : "저장했어요");
+  };
+  const addCategory = async (name: string) => {
+    const label = name.trim();
+    if (!label || label.length > 30)
+      throw new Error("카테고리 이름을 1~30자로 입력해 주세요.");
+    if (
+      categoryOptions(ledger.customCategories).some(
+        (item) => categoryLabelKey(item.label) === categoryLabelKey(label),
+      )
+    )
+      throw new Error("이미 있는 카테고리 이름이에요.");
+    const id = `custom-${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    await commit({
+      ...ledger,
+      customCategories: [...ledger.customCategories, { id, label }],
+    });
+    setToast("카테고리를 추가했어요");
+    return id;
   };
   const backup = async () => {
     try {
@@ -1300,33 +1460,90 @@ export default function LedgerApp() {
         )}
         {tab !== "settings" && (
           <>
+            <div className="period-switch" aria-label="조회 기간">
+              <button
+                aria-pressed={periodMode === "month"}
+                className={periodMode === "month" ? "selected" : ""}
+                onClick={() => setPeriodMode("month")}
+              >
+                월별
+              </button>
+              <button
+                aria-pressed={periodMode === "year"}
+                className={periodMode === "year" ? "selected" : ""}
+                onClick={() => setPeriodMode("year")}
+              >
+                연도별
+              </button>
+            </div>
             <div className="month-navigation">
               <button
                 className="icon-button"
-                aria-label="이전 달"
-                onClick={() => setMonth(shiftMonth(month, -1))}
+                aria-label={periodMode === "month" ? "이전 달" : "이전 연도"}
+                onClick={() =>
+                  setMonth(shiftMonth(month, periodMode === "month" ? -1 : -12))
+                }
               >
                 <ChevronLeft size={23} />
               </button>
-              <label className="month-picker">
+              <label
+                className={`month-picker ${periodMode === "year" ? "year-picker" : ""}`}
+              >
                 <span>
-                  {Number(month.slice(0, 4))}년 {Number(month.slice(5))}월
+                  {Number(month.slice(0, 4))}년
+                  {periodMode === "month" ? ` ${Number(month.slice(5))}월` : ""}
                 </span>
                 <ChevronDown size={18} />
-                <input
-                  aria-label="조회 월 선택"
-                  type="month"
-                  value={month}
-                  onChange={(event) => {
-                    if (/^\d{4}-\d{2}$/.test(event.target.value))
-                      setMonth(event.target.value);
-                  }}
-                />
+                {periodMode === "year" ? (
+                  <select
+                    aria-label="조회 연도 선택"
+                    value={month.slice(0, 4)}
+                    onChange={(event) =>
+                      setMonth(`${event.target.value}${month.slice(4)}`)
+                    }
+                  >
+                    {[
+                      ...new Set([
+                        ...ledger.transactions.map((item) =>
+                          Number(item.date.slice(0, 4)),
+                        ),
+                        Number(today().slice(0, 4)),
+                        ...Array.from(
+                          { length: 11 },
+                          (_, index) => Number(month.slice(0, 4)) - 5 + index,
+                        ),
+                      ]),
+                    ]
+                      .filter((year) => year >= 1000 && year <= 9999)
+                      .sort((a, b) => b - a)
+                      .map((year) => (
+                        <option key={year} value={year}>
+                          {year}년
+                        </option>
+                      ))}
+                  </select>
+                ) : (
+                  <input
+                    aria-label="조회 월 선택"
+                    type="month"
+                    min="1000-01"
+                    max="9999-12"
+                    value={month}
+                    onChange={(event) => {
+                      if (
+                        /^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(event.target.value)
+                      )
+                        setMonth(event.target.value);
+                    }}
+                  />
+                )}
               </label>
               <button
                 className="icon-button"
-                aria-label="다음 달"
-                onClick={() => setMonth(shiftMonth(month, 1))}
+                aria-label={periodMode === "month" ? "다음 달" : "다음 연도"}
+                onClick={() =>
+                  setMonth(shiftMonth(month, periodMode === "month" ? 1 : 12))
+                }
               >
                 <ChevronRight size={23} />
               </button>
@@ -1382,8 +1599,9 @@ export default function LedgerApp() {
                 </button>
               </div>
               <TransactionRows
-                transactions={monthly.slice(0, 5)}
+                transactions={period.slice(0, 5)}
                 currency={currency}
+                customCategories={ledger.customCategories}
                 onSelect={setDetail}
               />
               <p className="footnote">
@@ -1396,7 +1614,7 @@ export default function LedgerApp() {
           <section className="all-transactions">
             <div className="section-heading">
               <h1>
-                내역 <span className="count">{monthly.length}</span>
+                내역 <span className="count">{filtered.length}</span>
               </h1>
               <button className="text-button" onClick={() => setEditor(null)}>
                 <Plus size={20} />
@@ -1407,7 +1625,7 @@ export default function LedgerApp() {
               <Search size={20} />
               <input
                 aria-label="내역 검색"
-                placeholder="내용, 메모, 통화 검색"
+                placeholder="내용, 카테고리, 통화 검색"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -1428,12 +1646,53 @@ export default function LedgerApp() {
                 </button>
               ))}
             </div>
+            <div className="category-chips" aria-label="카테고리 필터">
+              <button
+                aria-pressed={!selectedCategories.length}
+                className={!selectedCategories.length ? "selected" : ""}
+                onClick={() => setSelectedCategories([])}
+              >
+                모든 카테고리
+              </button>
+              {categoryOptions(ledger.customCategories).map((category) => (
+                <button
+                  key={category.id}
+                  aria-pressed={selectedCategories.includes(category.id)}
+                  className={
+                    selectedCategories.includes(category.id) ? "selected" : ""
+                  }
+                  onClick={() =>
+                    setSelectedCategories((current) =>
+                      current.includes(category.id)
+                        ? current.filter((id) => id !== category.id)
+                        : [...current, category.id],
+                    )
+                  }
+                >
+                  {category.label}
+                </button>
+              ))}
+            </div>
+            <LedgerCharts
+              transactions={matching}
+              currency={currency}
+              customCategories={ledger.customCategories}
+              month={month}
+              mode={periodMode}
+              breakdownType={filter === "income" ? "income" : "expense"}
+            />
+            <div className="section-heading transaction-results-heading">
+              <h2>
+                거래 내역 <span className="count">{filtered.length}</span>
+              </h2>
+            </div>
             <TransactionRows
               transactions={filtered}
               currency={currency}
+              customCategories={ledger.customCategories}
               onSelect={setDetail}
               emptyText={
-                query || filter !== "all"
+                query || filter !== "all" || selectedCategories.length
                   ? "조건에 맞는 내역이 없어요"
                   : "아직 내역이 없어요"
               }
@@ -1452,6 +1711,7 @@ export default function LedgerApp() {
             logout={() => void logout()}
             loggingOut={loggingOut}
             saving={saving}
+            onAddCategory={addCategory}
           />
         )}
       </main>
@@ -1472,6 +1732,8 @@ export default function LedgerApp() {
         <TransactionEditor
           transaction={editor}
           currencies={ledger.currencies}
+          customCategories={ledger.customCategories}
+          onAddCategory={addCategory}
           onSave={save}
           close={() => setEditor(undefined)}
         />
@@ -1480,6 +1742,7 @@ export default function LedgerApp() {
         <TransactionDetail
           transaction={detail}
           currency={currency}
+          customCategories={ledger.customCategories}
           close={() => setDetail(null)}
           edit={() => {
             setEditor(detail);

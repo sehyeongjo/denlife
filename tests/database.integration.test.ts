@@ -28,20 +28,30 @@ test(
       }
     });
     try {
-      await sql`INSERT INTO denlife_ledgers (id, data) VALUES (${id}, ${JSON.stringify(newLedger())}::jsonb)`;
+      const legacyLedger: Partial<ReturnType<typeof newLedger>> = newLedger();
+      delete legacyLedger.customCategories;
+      await sql`INSERT INTO denlife_ledgers (id, data) VALUES (${id}, ${JSON.stringify(legacyLedger)}::jsonb)`;
       let current = await readLedger(id);
+      assert.deepEqual(current.ledger.customCategories, []);
+      const customCategory = { id: "custom-integration", label: "여행" };
       const sample = {
         ...demoTransactions("2026-11")[0],
         id: randomUUID(),
         title: "'; DROP TABLE denlife_ledgers; --",
+        category: customCategory.id,
       };
       current = await writeLedger(id, {
-        ledger: { ...current.ledger, transactions: [sample] },
+        ledger: {
+          ...current.ledger,
+          customCategories: [customCategory],
+          transactions: [sample],
+        },
         revision: current.revision,
       });
       assert.equal(current.revision, 1);
       const persisted = await readLedger(id);
       assert.deepEqual(persisted.ledger.transactions[0], sample);
+      assert.deepEqual(persisted.ledger.customCategories, [customCategory]);
       current = await writeLedger(id, {
         ledger: {
           ...current.ledger,
@@ -68,7 +78,7 @@ test(
         InvalidLedgerUpdateError,
       );
       current = await writeLedger(id, {
-        ledger: newLedger(),
+        ledger: { ...current.ledger, transactions: [] },
         revision: current.revision,
       });
       assert.equal(current.ledger.transactions.length, 0);

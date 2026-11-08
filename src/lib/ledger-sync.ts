@@ -1,4 +1,4 @@
-import { parseLedger, type Ledger } from "./ledger.ts";
+import { categoryLabelKey, parseLedger, type Ledger } from "./ledger.ts";
 
 export type LedgerState = { ledger: Ledger; revision: number };
 export const MIGRATION_KEY = "denlife.ledger.v1.neon-migrated";
@@ -22,13 +22,30 @@ export function parseLedgerState(value: unknown): LedgerState {
 
 export function mergeLocalLedger(remote: Ledger, local: Ledger): Ledger {
   const remoteIds = new Set(remote.transactions.map((item) => item.id));
+  const customCategories = [...remote.customCategories];
+  const categoryIds = new Map<string, string>();
+  for (const category of local.customCategories) {
+    const existing = customCategories.find(
+      (item) =>
+        item.id === category.id ||
+        categoryLabelKey(item.label) === categoryLabelKey(category.label),
+    );
+    categoryIds.set(category.id, existing?.id ?? category.id);
+    if (!existing) customCategories.push(category);
+  }
   return {
     ...remote,
     started: true,
     currencies: [...new Set([...remote.currencies, ...local.currencies])],
+    customCategories,
     transactions: [
       ...remote.transactions,
-      ...local.transactions.filter((item) => !remoteIds.has(item.id)),
+      ...local.transactions
+        .filter((item) => !remoteIds.has(item.id))
+        .map((item) => ({
+          ...item,
+          category: categoryIds.get(item.category) ?? item.category,
+        })),
     ],
   };
 }

@@ -58,3 +58,28 @@ test("updates preserve registration timestamps and FX snapshots", () => {
     }),
   );
 });
+
+test("migration preserves custom categories and remaps matching names to server IDs", () => {
+  const remote = {
+    ...newLedger(),
+    customCategories: [{ id: "custom-server", label: "Travel" }],
+  };
+  const local = {
+    ...newLedger(),
+    customCategories: [
+      { id: "custom-local", label: "travel" },
+      { id: "custom-health", label: "건강" },
+    ],
+    transactions: [
+      { ...demoTransactions("2026-11")[1], category: "custom-local" },
+    ],
+  };
+  const merged = mergeLocalLedger(remote, local);
+  assert.equal(merged.customCategories.length, 2);
+  assert.equal(merged.transactions[0].category, "custom-server");
+  assert.deepEqual(
+    parseLedgerState({ ledger: merged, revision: 0 }).ledger,
+    merged,
+  );
+  assert.deepEqual(mergeLocalLedger(merged, local), merged);
+});

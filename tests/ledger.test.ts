@@ -106,3 +106,51 @@ test("older phone currency catalogues can read a snapshot with newly introduced 
     true,
   );
 });
+
+test("custom categories persist while old ledgers remain readable", () => {
+  const legacy: Partial<ReturnType<typeof newLedger>> = {
+    ...newLedger(),
+    transactions: demoTransactions("2026-11"),
+  };
+  delete legacy.customCategories;
+  assert.deepEqual(parseLedger(JSON.stringify(legacy)).customCategories, []);
+  const ledger = {
+    ...newLedger(),
+    customCategories: [{ id: "custom-travel", label: "여행" }],
+    transactions: [
+      { ...demoTransactions("2026-11")[1], category: "custom-travel" },
+    ],
+  };
+  assert.deepEqual(parseLedger(JSON.stringify(ledger)), ledger);
+  for (const customCategories of [
+    null,
+    {},
+    [{ id: "food", label: "여행" }],
+    [{ id: "custom-1", label: "식비" }],
+    [{ id: "custom-1", label: "" }],
+    [{ id: "custom-1", label: " 여행 " }],
+    [{ id: "custom-1", label: "가".repeat(31) }],
+    [
+      { id: "custom-1", label: "여행" },
+      { id: "custom-1", label: "건강" },
+    ],
+    [
+      { id: "custom-1", label: "Travel" },
+      { id: "custom-2", label: "ＴＲＡＶＥＬ" },
+    ],
+  ])
+    assert.throws(() =>
+      parseLedger(JSON.stringify({ ...newLedger(), customCategories })),
+    );
+  assert.throws(() =>
+    parseLedger(JSON.stringify({ ...ledger, customCategories: [] })),
+  );
+  assert.throws(() =>
+    parseLedger(
+      JSON.stringify({
+        ...ledger,
+        transactions: [{ ...ledger.transactions[0], category: "constructor" }],
+      }),
+    ),
+  );
+});

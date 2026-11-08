@@ -11,7 +11,44 @@ export const CATEGORIES = {
   other: { label: "기타", color: "#c7cac5", icon: "dots" },
 } as const;
 
-export type Category = keyof typeof CATEGORIES;
+export type Category = string;
+export type CustomCategory = { id: string; label: string };
+export const CATEGORY_COLORS = [
+  "#3182f6",
+  "#f5a524",
+  "#34b89a",
+  "#9b7ae8",
+  "#ef788c",
+  "#54afcf",
+  "#b99b62",
+  "#7d8ca3",
+];
+export const categoryLabelKey = (label: string) =>
+  label.trim().normalize("NFKC").toLocaleLowerCase("ko-KR");
+
+export function categoryOptions(customCategories: CustomCategory[]) {
+  return [
+    ...Object.entries(CATEGORIES).map(([id, data], index) => ({
+      ...data,
+      id,
+      color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+    })),
+    ...customCategories.map(({ id, label }, index) => ({
+      id,
+      label,
+      icon: "dots",
+      color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+    })),
+  ];
+}
+
+export function categoryInfo(id: string, customCategories: CustomCategory[]) {
+  return (
+    categoryOptions(customCategories).find(
+      (category) => category.id === id,
+    ) ?? { id, ...CATEGORIES.other }
+  );
+}
 export type RateSnapshot = {
   base: "DKK";
   rates: Record<string, number>;
@@ -36,6 +73,7 @@ export type Ledger = {
   started: boolean;
   currencies: string[];
   displayCurrency: string;
+  customCategories: CustomCategory[];
   transactions: Transaction[];
 };
 
@@ -80,6 +118,7 @@ export function newLedger(): Ledger {
     started: true,
     currencies: [...DEFAULT_CURRENCIES],
     displayCurrency: "DKK",
+    customCategories: [],
     transactions: [],
   };
 }
@@ -196,6 +235,31 @@ export function parseLedger(raw: string): Ledger {
     !Array.isArray(value.transactions)
   )
     throw new Error("올바른 가계부 데이터가 아닙니다.");
+  // Old DB records and browser backups predate custom categories.
+  const customCategories =
+    value.customCategories === undefined ? [] : value.customCategories;
+  if (!Array.isArray(customCategories))
+    throw new Error("카테고리 데이터를 읽을 수 없습니다.");
+  const categoryIds = new Set(Object.keys(CATEGORIES));
+  const categoryLabels = new Set(
+    Object.values(CATEGORIES).map(({ label }) => categoryLabelKey(label)),
+  );
+  for (const category of customCategories) {
+    if (
+      !isRecord(category) ||
+      typeof category.id !== "string" ||
+      !/^custom-[a-zA-Z0-9-]{1,64}$/.test(category.id) ||
+      categoryIds.has(category.id) ||
+      typeof category.label !== "string" ||
+      !category.label.trim() ||
+      category.label !== category.label.trim() ||
+      category.label.length > 30 ||
+      categoryLabels.has(categoryLabelKey(category.label))
+    )
+      throw new Error("카테고리 이름이 중복되거나 올바르지 않습니다.");
+    categoryIds.add(category.id);
+    categoryLabels.add(categoryLabelKey(category.label));
+  }
   const ids = new Set<string>();
   for (const transaction of value.transactions) {
     if (
@@ -213,7 +277,7 @@ export function parseLedger(raw: string): Ledger {
       transaction.amountMinor > 1_000_000_000_000 ||
       !validCode(transaction.currency) ||
       typeof transaction.category !== "string" ||
-      !Object.hasOwn(CATEGORIES, transaction.category) ||
+      !categoryIds.has(transaction.category) ||
       !validDate(transaction.date) ||
       typeof transaction.note !== "string" ||
       transaction.note.length > 500 ||
@@ -225,7 +289,7 @@ export function parseLedger(raw: string): Ledger {
       throw new Error("저장된 거래 내역을 읽을 수 없습니다.");
     ids.add(transaction.id);
   }
-  return value as Ledger;
+  return { ...value, customCategories } as Ledger;
 }
 
 export function normalizeRates(
