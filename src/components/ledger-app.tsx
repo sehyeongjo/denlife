@@ -146,7 +146,6 @@ function Modal({
       }}
     >
       <div className="modal-inner">
-        <div className="sheet-handle" />
         <div className="modal-heading">
           <h2>{title}</h2>
           <button className="icon-button" onClick={close} aria-label="닫기">

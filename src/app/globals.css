@@ -697,12 +697,13 @@ svg {
 }
 .modal {
   width: 100%;
-  max-width: 560px;
-  max-height: 94dvh;
-  margin: auto auto 0;
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 24px 24px 0 0;
+  border-radius: 0;
   background: #fff;
   color: var(--ink);
   overflow: auto;
@@ -712,14 +713,9 @@ svg {
   background: #0007;
 }
 .modal-inner {
-  padding: 12px 22px calc(24px + env(safe-area-inset-bottom));
-}
-.sheet-handle {
-  width: 34px;
-  height: 4px;
-  background: #d1d6db;
-  border-radius: 4px;
-  margin: 0 auto 13px;
+  min-height: 100%;
+  padding: 0 max(22px, env(safe-area-inset-right))
+    calc(24px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
 }
 .modal-heading {
   display: flex;
@@ -729,7 +725,7 @@ svg {
   background: #fff;
   position: sticky;
   top: 0;
-  padding: 5px 0 15px;
+  padding: max(12px, env(safe-area-inset-top)) 0 15px;
   z-index: 2;
 }
 .modal-heading h2 {
@@ -1137,14 +1133,18 @@ details[open] > summary > svg {
     border-right: 1px solid #e5e8eb;
   }
   .modal {
+    max-width: 560px;
+    height: fit-content;
+    max-height: 94dvh;
     margin: auto;
     border-radius: 24px;
   }
-  .sheet-handle {
-    display: none;
-  }
   .modal-inner {
+    min-height: 0;
     padding-top: 20px;
+  }
+  .modal-heading {
+    padding-top: 5px;
   }
 }
 @media (max-width: 360px) {
