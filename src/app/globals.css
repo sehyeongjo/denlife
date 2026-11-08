@@ -907,11 +907,38 @@ details[open] > summary > svg {
   padding: 10px;
   border-radius: 9px;
 }
-.save-button {
-  position: sticky;
-  bottom: 0;
-  box-shadow: 0 -8px 0 5px #fff;
-  z-index: 3;
+.editor-modal {
+  overflow: hidden;
+}
+.editor-modal .modal-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+.editor-modal .modal-heading {
+  flex-shrink: 0;
+  padding-left: max(22px, env(safe-area-inset-left));
+  padding-right: max(22px, env(safe-area-inset-right));
+}
+.editor-form {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 max(22px, env(safe-area-inset-right)) 24px
+    max(22px, env(safe-area-inset-left));
+}
+.editor-footer {
+  flex-shrink: 0;
+  padding: 16px max(22px, env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+  border-top: 1px solid #e5e8eb;
+  background: #fff;
+}
+.editor-footer .form-error {
+  margin: 0 0 12px;
 }
 .form-error {
   background: #fff3f3;
@@ -1138,6 +1165,9 @@ details[open] > summary > svg {
     max-height: 94dvh;
     margin: auto;
     border-radius: 24px;
+  }
+  .editor-modal {
+    height: 94dvh;
   }
   .modal-inner {
     min-height: 0;

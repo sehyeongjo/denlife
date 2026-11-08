@@ -419,7 +419,7 @@ function TransactionEditor({
       }}
       className="editor-modal"
     >
-      <form onSubmit={submit}>
+      <form id="transaction-form" className="editor-form" onSubmit={submit}>
         <div className="type-switch">
           <button
             type="button"
@@ -612,19 +612,22 @@ function TransactionEditor({
             </>
           )}
         </details>
+      </form>
+      <div className="editor-footer">
         {error && (
           <p className="form-error" role="alert">
             {error}
           </p>
         )}
         <button
-          className="button button-primary full-width save-button"
+          className="button button-primary full-width"
           disabled={saving || addingCategory || (loading && !manual)}
           type="submit"
+          form="transaction-form"
         >
           {saving ? "저장 중…" : transaction ? "수정하기" : "저장하기"}
         </button>
-      </form>
+      </div>
     </Modal>
   );
 }
