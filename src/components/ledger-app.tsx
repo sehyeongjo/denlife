@@ -425,10 +425,8 @@ function TransactionEditor({
           <button
             type="button"
             className={type === "expense" ? "selected" : ""}
-            onClick={() => {
-              setType("expense");
-              if (category === "salary") setCategory("food");
-            }}
+            aria-pressed={type === "expense"}
+            onClick={() => setType("expense")}
           >
             <ArrowUpRight size={17} />
             {category === "management" ? "잔액 차감" : "지출"}
@@ -436,10 +434,8 @@ function TransactionEditor({
           <button
             type="button"
             className={type === "income" ? "selected" : ""}
-            onClick={() => {
-              setType("income");
-              if (category !== "management") setCategory("salary");
-            }}
+            aria-pressed={type === "income"}
+            onClick={() => setType("income")}
           >
             <ArrowDownLeft size={17} />
             {category === "management" ? "잔액 추가" : "수입"}
@@ -503,18 +499,11 @@ function TransactionEditor({
               value={category}
               onChange={(event) => setCategory(event.target.value as Category)}
             >
-              {categoryOptions(customCategories)
-                .filter(({ id: key }) =>
-                  type === "income"
-                    ? ["salary", "other", "management"].includes(key) ||
-                      key.startsWith("custom-")
-                    : key !== "salary",
-                )
-                .map((data) => (
-                  <option key={data.id} value={data.id}>
-                    {data.label}
-                  </option>
-                ))}
+              {categoryOptions(customCategories).map((data) => (
+                <option key={data.id} value={data.id}>
+                  {data.label}
+                </option>
+              ))}
             </select>
           </label>
           {category === "management" && (
