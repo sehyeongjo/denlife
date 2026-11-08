@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   convertedMinor,
   demoTransactions,
+  isManagement,
   newLedger,
   normalizeRates,
   parseAmount,
@@ -18,6 +19,92 @@ test("currency precision and amount validation", () => {
   for (const value of ["0", "-1", "1e3", "1.234", "NaN", "Infinity", ""])
     assert.equal(parseAmount(value, "DKK"), null);
   assert.equal(parseAmount("12.5", "JPY"), null);
+});
+
+test("management entries change only the balance, using their registration FX", () => {
+  const sample = demoTransactions("2026-11")[0];
+  const transactions = [
+    { ...sample, id: "salary", amountMinor: 50000 },
+    {
+      ...sample,
+      id: "food",
+      type: "expense" as const,
+      category: "food",
+      amountMinor: 10000,
+    },
+    {
+      ...sample,
+      id: "opening",
+      category: "management",
+      amountMinor: 10000,
+      currency: "USD",
+      fx: { ...sample.fx, rates: { DKK: 1, USD: 0.2 } },
+    },
+    {
+      ...sample,
+      id: "adjustment",
+      type: "expense" as const,
+      category: "management",
+      amountMinor: 5000,
+    },
+  ];
+  assert.deepEqual(totals(transactions, "DKK"), {
+    income: 50000,
+    expense: 10000,
+    balance: 85000,
+    missing: 0,
+  });
+  const management = transactions.filter(isManagement);
+  assert.deepEqual(totals(management, "DKK"), {
+    income: 0,
+    expense: 0,
+    balance: 45000,
+    missing: 0,
+  });
+  assert.deepEqual(totals(management, "EUR"), {
+    income: 0,
+    expense: 0,
+    balance: -668,
+    missing: 1,
+  });
+  assert.deepEqual(totals([], "DKK"), {
+    income: 0,
+    expense: 0,
+    balance: 0,
+    missing: 0,
+  });
+});
+
+test("management is available by default and existing same-name custom entries normalize without data loss", () => {
+  const sample = { ...demoTransactions("2026-11")[0], category: "management" };
+  const ledger = { ...newLedger(), transactions: [sample] };
+  assert.deepEqual(parseLedger(JSON.stringify(ledger)), ledger);
+  const legacy = {
+    ...ledger,
+    customCategories: [
+      { id: "custom-existing", label: "관리항목" },
+      { id: "custom-travel", label: "여행" },
+    ],
+    transactions: [{ ...sample, category: "custom-existing" }],
+  };
+  const normalized = parseLedger(JSON.stringify(legacy));
+  assert.deepEqual(normalized.transactions, [sample]);
+  assert.deepEqual(normalized.customCategories, [
+    { id: "custom-travel", label: "여행" },
+  ]);
+  assert.deepEqual(parseLedger(JSON.stringify(normalized)), normalized);
+  assert.equal(legacy.transactions[0].category, "custom-existing");
+  assert.throws(() =>
+    parseLedger(
+      JSON.stringify({
+        ...legacy,
+        customCategories: [
+          ...legacy.customCategories,
+          { id: "custom-duplicate", label: "관리항목" },
+        ],
+      }),
+    ),
+  );
 });
 
 test("totals use each transaction's registration rate, independent of later rates", () => {

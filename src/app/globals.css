@@ -275,6 +275,9 @@ svg {
   font-size: 17px;
   color: var(--secondary);
 }
+.balance-section > .footnote {
+  margin: -12px 0 20px;
+}
 .balance-amount {
   margin-top: 5px;
   font-size: clamp(30px, 9.5vw, 42px);
@@ -497,14 +500,14 @@ svg {
 }
 .filter-tabs {
   display: flex;
-  gap: 7px;
+  gap: 4px;
   margin: 16px 0 4px;
 }
 .filter-tabs button {
   min-width: 60px;
   min-height: 44px;
   border-radius: 11px;
-  padding: 10px 16px;
+  padding: 10px 12px;
   font-size: 15px;
   color: var(--muted);
 }

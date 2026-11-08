@@ -44,6 +44,7 @@ import {
   currencyFlag,
   currencyName,
   fractionDigits,
+  isManagement,
   money,
   monthKey,
   parseAmount,
@@ -430,18 +431,18 @@ function TransactionEditor({
             }}
           >
             <ArrowUpRight size={17} />
-            지출
+            {category === "management" ? "잔액 차감" : "지출"}
           </button>
           <button
             type="button"
             className={type === "income" ? "selected" : ""}
             onClick={() => {
               setType("income");
-              setCategory("salary");
+              if (category !== "management") setCategory("salary");
             }}
           >
             <ArrowDownLeft size={17} />
-            수입
+            {category === "management" ? "잔액 추가" : "수입"}
           </button>
         </div>
         <label className="field-label" htmlFor="amount">
@@ -505,7 +506,7 @@ function TransactionEditor({
               {categoryOptions(customCategories)
                 .filter(({ id: key }) =>
                   type === "income"
-                    ? ["salary", "other"].includes(key) ||
+                    ? ["salary", "other", "management"].includes(key) ||
                       key.startsWith("custom-")
                     : key !== "salary",
                 )
@@ -516,6 +517,11 @@ function TransactionEditor({
                 ))}
             </select>
           </label>
+          {category === "management" && (
+            <p className="footnote">
+              전체 잔액에만 반영해요. 수입·지출 합계와 그래프에서는 제외돼요.
+            </p>
+          )}
           {addingCategory ? (
             <CategoryCreator
               onAdd={async (name) => {
@@ -738,7 +744,15 @@ function TransactionDetail({
       <dl className="detail-list">
         <div>
           <dt>유형</dt>
-          <dd>{transaction.type === "income" ? "수입" : "지출"}</dd>
+          <dd>
+            {isManagement(transaction)
+              ? transaction.type === "income"
+                ? "잔액 추가"
+                : "잔액 차감"
+              : transaction.type === "income"
+                ? "수입"
+                : "지출"}
+          </dd>
         </div>
         <div>
           <dt>카테고리</dt>
@@ -755,6 +769,9 @@ function TransactionDetail({
           </div>
         )}
       </dl>
+      {isManagement(transaction) && (
+        <p className="footnote">전체 잔액에만 반영되는 관리항목이에요.</p>
+      )}
       <details className="rate-notice">
         <summary>
           저장된 환율 <ChevronDown size={17} />
@@ -898,6 +915,10 @@ function Settings({
             <span key={category.id}>{category.label}</span>
           ))}
         </div>
+        <p className="footnote">
+          관리항목은 전체 잔액에만 반영해요. 수입·지출 합계와 그래프에서는
+          제외돼요.
+        </p>
         {addingCategory && (
           <CategoryCreator
             onAdd={onAddCategory}
@@ -913,7 +934,9 @@ function Settings({
             통화 추가
           </button>
         </div>
-        <p className="section-description">전체 기간 · 등록 당시 환율 기준</p>
+        <p className="section-description">
+          전체 기간 · 관리항목 포함 · 등록 당시 환율 기준
+        </p>
         <div className="currency-list">
           {ledger.currencies.map((code) => {
             const aggregate = totals(ledger.transactions, code);
@@ -1269,6 +1292,7 @@ export default function LedgerApp() {
     );
   const currency = ledger.displayCurrency;
   const summary = totals(period, currency);
+  const overall = totals(ledger.transactions, currency);
   const matching = period.filter(
     (item) =>
       (!selectedCategories.length ||
@@ -1278,7 +1302,11 @@ export default function LedgerApp() {
         .includes(query.toLowerCase()),
   );
   const filtered = matching.filter(
-    (item) => filter === "all" || item.type === filter,
+    (item) =>
+      filter === "all" ||
+      (filter === "management"
+        ? isManagement(item)
+        : !isManagement(item) && item.type === filter),
   );
   const navigate = (next: Tab) => {
     setTab(next);
@@ -1572,13 +1600,26 @@ export default function LedgerApp() {
                   </strong>
                 </div>
                 <div>
-                  <span>남은 금액</span>
+                  <span>기간 잔액</span>
                   <strong>
-                    {money(summary.balance, currency)}
+                    {money(summary.income - summary.expense, currency)}
+                    <small>{currency}</small>
+                  </strong>
+                </div>
+                <div>
+                  <span>전체 잔액</span>
+                  <strong>
+                    {money(overall.balance, currency)}
                     <small>{currency}</small>
                   </strong>
                 </div>
               </div>
+              <p className="footnote">
+                전체 잔액은 모든 기간의 관리항목을 포함해요.
+                {overall.missing > 0
+                  ? ` 환산 환율이 없는 ${overall.missing}건은 제외했어요.`
+                  : ""}
+              </p>
               <button
                 className="button button-primary full-width"
                 onClick={() => setEditor(null)}
@@ -1635,6 +1676,7 @@ export default function LedgerApp() {
                 ["all", "전체"],
                 ["expense", "지출"],
                 ["income", "수입"],
+                ["management", "관리항목"],
               ].map(([value, label]) => (
                 <button
                   key={value}
@@ -1673,14 +1715,21 @@ export default function LedgerApp() {
                 </button>
               ))}
             </div>
-            <LedgerCharts
-              transactions={matching}
-              currency={currency}
-              customCategories={ledger.customCategories}
-              month={month}
-              mode={periodMode}
-              breakdownType={filter === "income" ? "income" : "expense"}
-            />
+            {filter === "management" ? (
+              <p className="footnote">
+                관리항목은 전체 잔액에만 반영돼요. 수입·지출 합계와 그래프에서는
+                제외돼요.
+              </p>
+            ) : (
+              <LedgerCharts
+                transactions={matching}
+                currency={currency}
+                customCategories={ledger.customCategories}
+                month={month}
+                mode={periodMode}
+                breakdownType={filter === "income" ? "income" : "expense"}
+              />
+            )}
             <div className="section-heading transaction-results-heading">
               <h2>
                 거래 내역 <span className="count">{filtered.length}</span>

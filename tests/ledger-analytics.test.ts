@@ -107,3 +107,49 @@ test("cashflow fills every day and month, handles leap years, missing rates and 
   assert.equal(yearly.points[11].expense, 0);
   assert.equal(yearly.missing, 1);
 });
+
+test("management is excluded from both chart totals and percentages in month and year views", () => {
+  const regular = [
+    expense("food"),
+    expense("income", {
+      type: "income",
+      category: "salary",
+      amountMinor: 30000,
+    }),
+  ];
+  const management = [
+    expense("management-income", {
+      category: "management",
+      type: "income",
+      amountMinor: 9999999,
+    }),
+    expense("management-expense", {
+      category: "management",
+      amountMinor: 80000,
+    }),
+    expense("management-missing", { category: "management", currency: "EUR" }),
+  ];
+  const all = [...regular, ...management];
+  for (const type of ["income", "expense"] as const) {
+    assert.deepEqual(
+      categoryBreakdown(all, "DKK", type),
+      categoryBreakdown(regular, "DKK", type),
+    );
+    assert.deepEqual(categoryBreakdown(management, "DKK", type), {
+      total: 0,
+      missing: 0,
+      items: [],
+    });
+  }
+  for (const mode of ["month", "year"] as const) {
+    assert.deepEqual(
+      cashflowTrend(all, "DKK", "2024-02", mode),
+      cashflowTrend(regular, "DKK", "2024-02", mode),
+    );
+    const empty = cashflowTrend(management, "DKK", "2024-02", mode);
+    assert.equal(empty.missing, 0);
+    assert.ok(
+      empty.points.every((point) => point.income === 0 && point.expense === 0),
+    );
+  }
+});

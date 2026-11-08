@@ -9,7 +9,7 @@ import {
   readLedger,
   writeLedger,
 } from "../src/lib/database.ts";
-import { demoTransactions, newLedger } from "../src/lib/ledger.ts";
+import { demoTransactions, newLedger, totals } from "../src/lib/ledger.ts";
 
 test(
   "Neon persists CRUD and snapshots, rejects stale writes, and parameterizes user text",
@@ -110,6 +110,26 @@ test(
           rejected.reason instanceof LedgerConflictError,
       );
       assert.equal((await readLedger(id)).ledger.transactions.length, 1);
+      current = await readLedger(id);
+      current = await writeLedger(id, {
+        ...current,
+        ledger: {
+          ...current.ledger,
+          transactions: current.ledger.transactions.map((item) => ({
+            ...item,
+            category: "management",
+          })),
+        },
+      });
+      const management = await readLedger(id);
+      assert.equal(management.ledger.transactions[0].category, "management");
+      assert.deepEqual(totals(management.ledger.transactions, "DKK"), {
+        income: 0,
+        expense: 0,
+        balance: sample.amountMinor,
+        missing: 0,
+      });
+      assert.deepEqual(management.ledger.transactions[0].fx, sample.fx);
     } catch (error) {
       if (error instanceof AssertionError) throw error;
       throw new Error(

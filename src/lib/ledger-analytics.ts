@@ -1,4 +1,4 @@
-import { convertedMinor, type Transaction } from "./ledger.ts";
+import { convertedMinor, isManagement, type Transaction } from "./ledger.ts";
 
 export type PeriodMode = "month" | "year";
 
@@ -25,7 +25,7 @@ export function categoryBreakdown(
   let total = 0;
   let missing = 0;
   for (const item of transactions) {
-    if (item.type !== type) continue;
+    if (isManagement(item) || item.type !== type) continue;
     const amount = convertedMinor(item, currency);
     if (amount === null) {
       missing++;
@@ -68,6 +68,7 @@ export function cashflowTrend(
   const byKey = new Map(points.map((point) => [point.key, point]));
   let missing = 0;
   for (const item of transactions) {
+    if (isManagement(item)) continue;
     const point = byKey.get(
       mode === "year" ? item.date.slice(0, 7) : item.date,
     );

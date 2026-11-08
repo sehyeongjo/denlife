@@ -198,7 +198,7 @@ export default function LedgerCharts({
         )}
         <p className="footnote">
           검색·카테고리 조건에 맞는 수입과 지출이에요. 그래프를 누르면 금액을 볼
-          수 있어요.
+          수 있어요. 관리항목은 제외돼요.
         </p>
         {missing > 0 && (
           <p className="chart-warning">

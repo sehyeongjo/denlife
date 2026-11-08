@@ -9,6 +9,7 @@ export const CATEGORIES = {
   leisure: { label: "여가", color: "#e4d18e", icon: "coffee" },
   salary: { label: "급여", color: "#a9c8b0", icon: "wallet" },
   other: { label: "기타", color: "#c7cac5", icon: "dots" },
+  management: { label: "관리항목", color: "#7d8ca3", icon: "wallet" },
 } as const;
 
 export type Category = string;
@@ -76,6 +77,9 @@ export type Ledger = {
   customCategories: CustomCategory[];
   transactions: Transaction[];
 };
+
+export const isManagement = (transaction: Transaction) =>
+  transaction.category === "management";
 
 export const currencyNames = new Intl.DisplayNames(["ko"], {
   type: "currency",
@@ -159,6 +163,7 @@ export function convertedMinor(
 export function totals(transactions: Transaction[], currency: string) {
   let income = 0,
     expense = 0,
+    balance = 0,
     missing = 0;
   for (const transaction of transactions) {
     const value = convertedMinor(transaction, currency);
@@ -166,10 +171,12 @@ export function totals(transactions: Transaction[], currency: string) {
       missing++;
       continue;
     }
+    balance += transaction.type === "income" ? value : -value;
+    if (isManagement(transaction)) continue;
     if (transaction.type === "income") income += value;
     else expense += value;
   }
-  return { income, expense, balance: income - expense, missing };
+  return { income, expense, balance, missing };
 }
 
 export function money(
@@ -241,8 +248,12 @@ export function parseLedger(raw: string): Ledger {
   if (!Array.isArray(customCategories))
     throw new Error("카테고리 데이터를 읽을 수 없습니다.");
   const categoryIds = new Set(Object.keys(CATEGORIES));
+  const managementLabel = categoryLabelKey(CATEGORIES.management.label);
+  const legacyManagementIds = new Set<string>();
   const categoryLabels = new Set(
-    Object.values(CATEGORIES).map(({ label }) => categoryLabelKey(label)),
+    Object.values(CATEGORIES)
+      .map(({ label }) => categoryLabelKey(label))
+      .filter((label) => label !== managementLabel),
   );
   for (const category of customCategories) {
     if (
@@ -259,6 +270,8 @@ export function parseLedger(raw: string): Ledger {
       throw new Error("카테고리 이름이 중복되거나 올바르지 않습니다.");
     categoryIds.add(category.id);
     categoryLabels.add(categoryLabelKey(category.label));
+    if (categoryLabelKey(category.label) === managementLabel)
+      legacyManagementIds.add(category.id);
   }
   const ids = new Set<string>();
   for (const transaction of value.transactions) {
@@ -289,7 +302,18 @@ export function parseLedger(raw: string): Ledger {
       throw new Error("저장된 거래 내역을 읽을 수 없습니다.");
     ids.add(transaction.id);
   }
-  return { ...value, customCategories } as Ledger;
+  // Preserve records from an existing user category named 관리항목.
+  return {
+    ...value,
+    customCategories: customCategories.filter(
+      (category) => !legacyManagementIds.has(category.id),
+    ),
+    transactions: value.transactions.map((transaction) =>
+      legacyManagementIds.has(transaction.category)
+        ? { ...transaction, category: "management" }
+        : transaction,
+    ),
+  } as Ledger;
 }
 
 export function normalizeRates(
