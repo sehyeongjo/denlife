@@ -44,7 +44,6 @@ import {
   fractionDigits,
   money,
   monthKey,
-  newLedger,
   parseAmount,
   parseLedger,
   shiftMonth,
@@ -56,6 +55,12 @@ import {
   type RateSnapshot,
   type Transaction,
 } from "@/lib/ledger";
+import {
+  mergeLocalLedger,
+  MIGRATION_KEY,
+  parseLedgerState,
+  type LedgerState,
+} from "@/lib/ledger-sync";
 
 type Tab = "home" | "transactions" | "settings";
 const navigation: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -166,7 +171,7 @@ function TransactionEditor({
 }: {
   transaction: Transaction | null;
   currencies: string[];
-  onSave: (transaction: Transaction) => boolean;
+  onSave: (transaction: Transaction) => Promise<void>;
   close: () => void;
 }) {
   const [type, setType] = useState<"expense" | "income">(
@@ -195,6 +200,16 @@ function TransactionEditor({
   const [error, setError] = useState("");
   const [manual, setManual] = useState(false);
   const [manualRate, setManualRate] = useState("");
+  const [draftId] = useState(
+    () =>
+      transaction?.id ??
+      (typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join("")),
+  );
+  const draftCreatedAt = useRef(transaction?.createdAt);
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setRateError("");
@@ -285,15 +300,8 @@ function TransactionEditor({
         throw new Error(
           "선택한 통화의 환율이 없어요. 환율을 직접 입력해 주세요.",
         );
-      const id =
-        transaction?.id ??
-        (typeof crypto.randomUUID === "function"
-          ? crypto.randomUUID()
-          : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-              byte.toString(16).padStart(2, "0"),
-            ).join(""));
       const result: Transaction = {
-        id,
+        id: draftId,
         type,
         title: title.trim(),
         amountMinor,
@@ -301,14 +309,11 @@ function TransactionEditor({
         category,
         date,
         note: note.trim(),
-        createdAt: transaction?.createdAt ?? new Date().toISOString(),
+        createdAt: (draftCreatedAt.current ??= new Date().toISOString()),
         fx: structuredClone(fx),
       };
-      if (onSave(result)) close();
-      else
-        setError(
-          "이 브라우저에 저장하지 못했어요. 저장 공간과 사이트 저장소 권한을 확인해 주세요.",
-        );
+      await onSave(result);
+      close();
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -590,13 +595,19 @@ function TransactionDetail({
   currency: string;
   close: () => void;
   edit: () => void;
-  remove: () => boolean;
+  remove: () => Promise<void>;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
   const converted = convertedMinor(transaction, currency);
+  const [removing, setRemoving] = useState(false);
   return (
-    <Modal title="상세 내역" close={close}>
+    <Modal
+      title="상세 내역"
+      close={() => {
+        if (!removing) close();
+      }}
+    >
       <div className="detail-hero">
         <span>{transaction.title}</span>
         <strong className={transaction.type === "income" ? "income-text" : ""}>
@@ -665,20 +676,31 @@ function TransactionDetail({
           <div>
             <button
               className="button button-soft"
+              disabled={removing}
               onClick={() => setConfirmDelete(false)}
             >
               취소
             </button>
             <button
               className="button button-danger"
-              onClick={() => {
-                if (!remove())
+              disabled={removing}
+              onClick={async () => {
+                setRemoving(true);
+                setError("");
+                try {
+                  await remove();
+                } catch (cause) {
                   setError(
-                    "삭제하지 못했어요. 브라우저 저장소 권한을 확인해 주세요.",
+                    cause instanceof Error
+                      ? cause.message
+                      : "삭제하지 못했어요. 다시 시도해 주세요.",
                   );
+                } finally {
+                  setRemoving(false);
+                }
               }}
             >
-              삭제하기
+              {removing ? "삭제 중…" : "삭제하기"}
             </button>
           </div>
         </div>
@@ -709,9 +731,10 @@ function Settings({
   backup,
   logout,
   loggingOut,
+  saving,
 }: {
   ledger: Ledger;
-  commit: (ledger: Ledger) => boolean;
+  commit: (ledger: Ledger) => Promise<void>;
   rates: RateSnapshot | null;
   refresh: () => void;
   rateLoading: boolean;
@@ -719,6 +742,7 @@ function Settings({
   backup: () => void;
   logout: () => void;
   loggingOut: boolean;
+  saving: boolean;
 }) {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
@@ -733,6 +757,11 @@ function Settings({
   return (
     <div className="settings-page">
       <h1>설정</h1>
+      {!adding && error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       <section className="settings-section">
         <div className="section-heading">
           <h2>통화별 잔액</h2>
@@ -768,19 +797,29 @@ function Settings({
                 {code !== "DKK" ? (
                   <button
                     className="icon-button"
+                    disabled={saving}
                     aria-label={`${code} 통화 제거`}
-                    onClick={() =>
-                      commit({
-                        ...ledger,
-                        currencies: ledger.currencies.filter(
-                          (item) => item !== code,
-                        ),
-                        displayCurrency:
-                          ledger.displayCurrency === code
-                            ? "DKK"
-                            : ledger.displayCurrency,
-                      })
-                    }
+                    onClick={async () => {
+                      setError("");
+                      try {
+                        await commit({
+                          ...ledger,
+                          currencies: ledger.currencies.filter(
+                            (item) => item !== code,
+                          ),
+                          displayCurrency:
+                            ledger.displayCurrency === code
+                              ? "DKK"
+                              : ledger.displayCurrency,
+                        });
+                      } catch (cause) {
+                        setError(
+                          cause instanceof Error
+                            ? cause.message
+                            : "저장하지 못했어요.",
+                        );
+                      }
+                    }}
                   >
                     <X size={18} />
                   </button>
@@ -848,8 +887,8 @@ function Settings({
           <ChevronRight size={20} />
         </button>
         <p className="footnote">
-          내역은 이 브라우저에 저장돼요. 기기 변경이나 브라우저 데이터 삭제 전
-          백업해 주세요.
+          내역은 서버에 저장돼요. 같은 비밀번호로 접속한 기기에서 함께 볼 수
+          있어요.
         </p>
       </section>
       <section className="settings-section">
@@ -891,20 +930,24 @@ function Settings({
             {available.length ? (
               available.map((code) => (
                 <button
+                  disabled={saving}
                   key={code}
-                  onClick={() => {
-                    if (
-                      commit({
+                  onClick={async () => {
+                    setError("");
+                    try {
+                      await commit({
                         ...ledger,
                         currencies: [...ledger.currencies, code],
-                      })
-                    ) {
+                      });
                       setAdding(false);
                       setQuery("");
-                    } else
+                    } catch (cause) {
                       setError(
-                        "저장하지 못했어요. 브라우저 저장소 권한을 확인해 주세요.",
+                        cause instanceof Error
+                          ? cause.message
+                          : "저장하지 못했어요.",
                       );
+                    }
                   }}
                 >
                   <span>
@@ -924,9 +967,26 @@ function Settings({
   );
 }
 
+async function loadRemoteLedger(signal?: AbortSignal): Promise<LedgerState> {
+  const response = await fetch("/api/ledger", { cache: "no-store", signal });
+  if (response.status === 401) {
+    window.location.replace("/login");
+    throw new Error("다시 접속해 주세요.");
+  }
+  const value = await response.json();
+  if (!response.ok) throw new Error(value.error || "내역을 불러오지 못했어요.");
+  return parseLedgerState(value);
+}
+
 export default function LedgerApp() {
-  const [ledger, setLedger] = useState<Ledger | null>(null);
-  const [storageError, setStorageError] = useState("");
+  const [remote, setRemote] = useState<LedgerState | null>(null);
+  const remoteRef = useRef<LedgerState | null>(null);
+  const busy = useRef(false);
+  const requestSequence = useRef(0);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [localLedger, setLocalLedger] = useState<Ledger | null>(null);
+  const [migrationError, setMigrationError] = useState("");
   const [tab, setTab] = useState<Tab>("home");
   const [month, setMonth] = useState(monthKey);
   const [editor, setEditor] = useState<Transaction | null | undefined>();
@@ -938,6 +998,7 @@ export default function LedgerApp() {
   const [rateLoading, setRateLoading] = useState(false);
   const [rateError, setRateError] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
+  const ledger = remote?.ledger ?? null;
   const refresh = useCallback(async () => {
     setRateLoading(true);
     setRateError("");
@@ -949,37 +1010,96 @@ export default function LedgerApp() {
       setRateLoading(false);
     }
   }, []);
+  const reloadLedger = useCallback(async (signal?: AbortSignal) => {
+    if (!signal && busy.current) return;
+    const sequence = ++requestSequence.current;
+    busy.current = true;
+    setSaving(true);
+    setLoadError("");
+    try {
+      const state = await loadRemoteLedger(signal);
+      if (!signal?.aborted && sequence === requestSequence.current) {
+        remoteRef.current = state;
+        setRemote(state);
+      }
+    } catch (cause) {
+      if (!signal?.aborted && sequence === requestSequence.current)
+        setLoadError(
+          cause instanceof Error ? cause.message : "내역을 불러오지 못했어요.",
+        );
+    } finally {
+      if (sequence === requestSequence.current) {
+        busy.current = false;
+        setSaving(false);
+      }
+    }
+  }, []);
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      const stored = raw ? parseLedger(raw) : newLedger();
-      setLedger({ ...stored, started: true });
+      if (!localStorage.getItem(MIGRATION_KEY)) {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const local = parseLedger(raw);
+          if (local.transactions.length) setLocalLedger(local);
+        }
+      }
     } catch {
-      setStorageError(
-        "저장된 내역을 읽을 수 없어요. 원본 데이터를 백업해 주세요. 기존 데이터는 유지돼요.",
+      setMigrationError(
+        "이 기기의 기존 내역을 읽을 수 없어요. 원본을 백업해 주세요.",
       );
     }
+    const controller = new AbortController();
+    void reloadLedger(controller.signal);
     const onPageShow = (event: PageTransitionEvent) => {
       if (event.persisted) window.location.reload();
     };
     window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
+    return () => {
+      controller.abort();
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [reloadLedger]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(timer);
   }, [toast]);
-  const commit = (value: Ledger) => {
+  const commit = async (value: Ledger): Promise<void> => {
+    if (busy.current || !remoteRef.current)
+      throw new Error("저장 중이에요. 잠시 후 다시 시도해 주세요.");
+    busy.current = true;
+    setSaving(true);
     try {
-      const raw = JSON.stringify(value);
-      parseLedger(raw);
-      localStorage.setItem(STORAGE_KEY, raw);
-      setLedger(value);
-      return true;
-    } catch {
-      setToast("저장하지 못했어요. 브라우저 저장 공간과 권한을 확인해 주세요.");
-      return false;
+      const validated = parseLedger(JSON.stringify(value));
+      const response = await fetch("/api/ledger", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ledger: validated,
+          revision: remoteRef.current.revision,
+        }),
+      });
+      if (response.status === 401) {
+        window.location.replace("/login");
+        throw new Error("다시 접속해 주세요.");
+      }
+      const result = await response.json();
+      if (response.status === 409) {
+        const latest = await loadRemoteLedger();
+        remoteRef.current = latest;
+        setRemote(latest);
+      }
+      if (!response.ok)
+        throw new Error(
+          result.error || "저장하지 못했어요. 다시 시도해 주세요.",
+        );
+      const confirmed = parseLedgerState(result);
+      remoteRef.current = confirmed;
+      setRemote(confirmed);
+      setLoadError("");
+    } finally {
+      busy.current = false;
+      setSaving(false);
     }
   };
   const monthly = useMemo(
@@ -997,24 +1117,14 @@ export default function LedgerApp() {
     return (
       <main className="loading-screen">
         <strong>denlife</strong>
-        <p>{storageError || "불러오는 중…"}</p>
-        {storageError && (
+        <p>{loadError || "내역을 불러오는 중…"}</p>
+        {loadError && (
           <button
             className="button button-primary"
-            onClick={() => {
-              try {
-                download(
-                  localStorage.getItem(STORAGE_KEY) ?? "",
-                  `denlife-recovery-${today()}.json`,
-                );
-              } catch {
-                setStorageError(
-                  "브라우저의 사이트 저장소 권한을 허용한 후 새로고침해 주세요.",
-                );
-              }
-            }}
+            disabled={saving}
+            onClick={() => void reloadLedger()}
           >
-            원본 데이터 백업
+            다시 시도
           </button>
         )}
       </main>
@@ -1033,21 +1143,67 @@ export default function LedgerApp() {
     if (next === "settings" && !rates && !rateLoading) void refresh();
     window.scrollTo({ top: 0 });
   };
-  const save = (transaction: Transaction) => {
+  const save = async (transaction: Transaction) => {
     const existing = ledger.transactions;
+    const registered = existing.find((item) => item.id === transaction.id);
+    if (registered)
+      transaction = {
+        ...transaction,
+        fx: registered.fx,
+        createdAt: registered.createdAt,
+      };
     const transactions = existing.some((item) => item.id === transaction.id)
       ? existing.map((item) =>
           item.id === transaction.id ? transaction : item,
         )
       : [...existing, transaction];
-    if (!commit({ ...ledger, transactions })) return false;
+    await commit({ ...ledger, transactions });
     setMonth(transaction.date.slice(0, 7));
     setToast(editor ? "수정했어요" : "저장했어요");
-    return true;
   };
-  const backup = () => {
-    download(JSON.stringify(ledger, null, 2), `denlife-backup-${today()}.json`);
-    setToast("백업 파일을 다운로드했어요");
+  const backup = async () => {
+    try {
+      const latest = await loadRemoteLedger();
+      download(
+        JSON.stringify(latest.ledger, null, 2),
+        `denlife-backup-${today()}.json`,
+      );
+      setToast("백업 파일을 다운로드했어요");
+    } catch (cause) {
+      setToast(cause instanceof Error ? cause.message : "백업하지 못했어요.");
+    }
+  };
+  const backupLocal = () => {
+    try {
+      download(
+        localStorage.getItem(STORAGE_KEY) ?? "",
+        `denlife-local-backup-${today()}.json`,
+      );
+    } catch {
+      setToast("브라우저 저장소 권한을 확인해 주세요.");
+    }
+  };
+  const pendingLocalCount =
+    localLedger?.transactions.filter(
+      (item) =>
+        !ledger.transactions.some((remoteItem) => remoteItem.id === item.id),
+    ).length ?? 0;
+  const migrateLocal = async () => {
+    if (!localLedger) return;
+    try {
+      await commit(mergeLocalLedger(ledger, localLedger));
+      setLocalLedger(null);
+      try {
+        localStorage.setItem(MIGRATION_KEY, "true");
+      } catch {
+        /* The original backup remains intact if the marker cannot be saved. */
+      }
+      setToast("기존 내역을 DB로 옮겼어요");
+    } catch (cause) {
+      setToast(
+        cause instanceof Error ? cause.message : "기존 내역을 옮기지 못했어요.",
+      );
+    }
   };
   const logout = async () => {
     setLoggingOut(true);
@@ -1076,9 +1232,21 @@ export default function LedgerApp() {
             <select
               aria-label="합계 표시 통화"
               value={currency}
-              onChange={(event) =>
-                commit({ ...ledger, displayCurrency: event.target.value })
-              }
+              disabled={saving}
+              onChange={async (event) => {
+                try {
+                  await commit({
+                    ...ledger,
+                    displayCurrency: event.target.value,
+                  });
+                } catch (cause) {
+                  setToast(
+                    cause instanceof Error
+                      ? cause.message
+                      : "저장하지 못했어요.",
+                  );
+                }
+              }}
             >
               {ledger.currencies.map((code) => (
                 <option key={code} value={code}>
@@ -1089,8 +1257,47 @@ export default function LedgerApp() {
             <ChevronDown size={17} />
           </label>
         )}
+        <button
+          className="icon-button"
+          disabled={saving}
+          onClick={() => void reloadLedger()}
+          aria-label="내역 새로고침"
+        >
+          <RefreshCw size={20} className={saving ? "is-loading" : ""} />
+        </button>
       </header>
       <main className="page-main">
+        {loadError && (
+          <p className="warning-banner" role="alert">
+            {loadError}
+          </p>
+        )}
+        {pendingLocalCount > 0 && (
+          <div className="migration-banner">
+            <p>이 기기에 저장된 내역 {pendingLocalCount}건이 있어요.</p>
+            <span>기존 원본은 그대로 두고 DB에 추가해요.</span>
+            <div>
+              <button className="text-button" onClick={backupLocal}>
+                원본 백업
+              </button>
+              <button
+                className="button button-primary"
+                disabled={saving}
+                onClick={() => void migrateLocal()}
+              >
+                {saving ? "저장 중…" : "DB로 옮기기"}
+              </button>
+            </div>
+          </div>
+        )}
+        {migrationError && (
+          <div className="warning-banner">
+            <p>{migrationError}</p>
+            <button className="text-button" onClick={backupLocal}>
+              원본 백업
+            </button>
+          </div>
+        )}
         {tab !== "settings" && (
           <>
             <div className="month-navigation">
@@ -1244,6 +1451,7 @@ export default function LedgerApp() {
             backup={backup}
             logout={() => void logout()}
             loggingOut={loggingOut}
+            saving={saving}
           />
         )}
       </main>
@@ -1277,19 +1485,15 @@ export default function LedgerApp() {
             setEditor(detail);
             setDetail(null);
           }}
-          remove={() => {
-            if (
-              !commit({
-                ...ledger,
-                transactions: ledger.transactions.filter(
-                  (item) => item.id !== detail.id,
-                ),
-              })
-            )
-              return false;
+          remove={async () => {
+            await commit({
+              ...ledger,
+              transactions: ledger.transactions.filter(
+                (item) => item.id !== detail.id,
+              ),
+            });
             setDetail(null);
             setToast("삭제했어요");
-            return true;
           }}
         />
       )}
