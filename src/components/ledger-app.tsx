@@ -44,9 +44,11 @@ import {
   currencyFlag,
   currencyName,
   fractionDigits,
+  insertDecimalPoint,
   isManagement,
   money,
   monthKey,
+  normalizeDecimalInput,
   parseAmount,
   parseLedger,
   shiftMonth,
@@ -270,6 +272,7 @@ function TransactionEditor({
         )
       : "",
   );
+  const amountInput = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(transaction?.title ?? "");
   const [category, setCategory] = useState<Category>(
     transaction?.category ?? "food",
@@ -330,6 +333,21 @@ function TransactionEditor({
     amountMinor && rate
       ? Math.round((amountMinor / 10 ** fractionDigits(currency)) * rate * 100)
       : null;
+
+  function addAmountDecimal() {
+    const input = amountInput.current;
+    if (!input) return;
+    const next = insertDecimalPoint(
+      amount,
+      input.selectionStart ?? amount.length,
+      input.selectionEnd ?? amount.length,
+    );
+    setAmount(next.value);
+    input.focus();
+    requestAnimationFrame(() =>
+      input.setSelectionRange(next.caret, next.caret),
+    );
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -440,17 +458,35 @@ function TransactionEditor({
             {category === "management" ? "잔액 추가" : "수입"}
           </button>
         </div>
-        <label className="field-label" htmlFor="amount">
-          금액
-        </label>
+        <div className="amount-label-row">
+          <label className="field-label" htmlFor="amount">
+            금액
+          </label>
+          {fractionDigits(currency) > 0 && (
+            <button
+              type="button"
+              className="decimal-button"
+              aria-label="금액에 소수점 입력"
+              disabled={saving}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={addAmountDecimal}
+            >
+              <strong aria-hidden="true">.</strong> 소수점
+            </button>
+          )}
+        </div>
         <div className="amount-field">
           <input
             id="amount"
+            ref={amountInput}
+            type="text"
             autoFocus
-            inputMode="decimal"
+            inputMode={fractionDigits(currency) > 0 ? "decimal" : "numeric"}
             placeholder="0"
             value={amount}
-            onChange={(event) => setAmount(event.target.value)}
+            onChange={(event) =>
+              setAmount(normalizeDecimalInput(event.target.value))
+            }
             autoComplete="off"
             required
           />

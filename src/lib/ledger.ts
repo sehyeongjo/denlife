@@ -127,13 +127,28 @@ export function newLedger(): Ledger {
   };
 }
 
+export const normalizeDecimalInput = (value: string) =>
+  value.trim().replace(",", ".").replace(/^\./, "0.");
+
+export function insertDecimalPoint(
+  value: string,
+  start = value.length,
+  end = start,
+) {
+  if (/[.,]/.test(value.slice(0, start) + value.slice(end)))
+    return { value, caret: end };
+  const prefix = value.slice(0, start) || "0";
+  return { value: `${prefix}.${value.slice(end)}`, caret: prefix.length + 1 };
+}
+
 export function parseAmount(value: string, currency: string): number | null {
+  const normalized = normalizeDecimalInput(value);
   const decimals = fractionDigits(currency);
   const pattern = decimals
-    ? new RegExp(`^\\d+(?:\\.\\d{1,${decimals}})?$`)
+    ? new RegExp(`^\\d+(?:\\.\\d{0,${decimals}})?$`)
     : /^\d+$/;
-  if (!pattern.test(value.trim())) return null;
-  const amount = Math.round(Number(value) * 10 ** decimals);
+  if (!pattern.test(normalized)) return null;
+  const amount = Math.round(Number(normalized) * 10 ** decimals);
   return Number.isSafeInteger(amount) &&
     amount > 0 &&
     amount <= 1_000_000_000_000

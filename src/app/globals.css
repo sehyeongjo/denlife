@@ -715,7 +715,8 @@ svg {
 .modal-inner {
   min-height: 100%;
   padding: 0 max(22px, env(safe-area-inset-right))
-    calc(24px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+    calc(24px + env(safe-area-inset-bottom))
+    max(22px, env(safe-area-inset-left));
 }
 .modal-heading {
   display: flex;
@@ -763,6 +764,28 @@ svg {
 .field-label {
   font-size: 16px;
   color: var(--secondary);
+}
+.amount-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+.decimal-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: #e8f3ff;
+  color: #1b64da;
+  font-size: 16px;
+}
+.decimal-button strong {
+  font-size: 25px;
+  line-height: 1;
 }
 .amount-field {
   display: flex;
@@ -933,7 +956,8 @@ details[open] > summary > svg {
 .editor-footer {
   flex-shrink: 0;
   padding: 16px max(22px, env(safe-area-inset-right))
-    calc(16px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+    calc(16px + env(safe-area-inset-bottom))
+    max(22px, env(safe-area-inset-left));
   border-top: 1px solid #e5e8eb;
   background: #fff;
 }

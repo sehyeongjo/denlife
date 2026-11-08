@@ -4,8 +4,10 @@ import {
   convertedMinor,
   demoTransactions,
   isManagement,
+  insertDecimalPoint,
   newLedger,
   normalizeRates,
+  normalizeDecimalInput,
   parseAmount,
   parseLedger,
   shiftMonth,
@@ -19,6 +21,54 @@ test("currency precision and amount validation", () => {
   for (const value of ["0", "-1", "1e3", "1.234", "NaN", "Infinity", ""])
     assert.equal(parseAmount(value, "DKK"), null);
   assert.equal(parseAmount("12.5", "JPY"), null);
+});
+
+test("decimal and comma keypads parse the same amount without treating grouping separators as money", () => {
+  for (const currency of ["DKK", "EUR", "USD"]) {
+    for (const value of ["12.34", "12,34", " 12,34 "])
+      assert.equal(parseAmount(value, currency), 1234);
+    for (const value of [".5", ",5", "0.5", "0,5"])
+      assert.equal(parseAmount(value, currency), 50);
+    assert.equal(parseAmount("12.", currency), 1200);
+    assert.equal(parseAmount("12,", currency), 1200);
+    for (const value of [
+      "1,234",
+      "12,345",
+      "1.234,56",
+      "1,234.56",
+      "1 234,56",
+      "12..34",
+      "12,,34",
+      ".",
+      ",",
+      "0,00",
+      "-1,20",
+      "1e3",
+    ])
+      assert.equal(parseAmount(value, currency), null, `${currency}: ${value}`);
+  }
+  for (const currency of ["KRW", "JPY"]) {
+    assert.equal(parseAmount("1200", currency), 1200);
+    for (const value of ["12,5", "12.5", "12,00", "1,200", "12."])
+      assert.equal(parseAmount(value, currency), null);
+  }
+  assert.equal(normalizeDecimalInput(",5"), "0.5");
+  assert.equal(normalizeDecimalInput("12,34"), "12.34");
+});
+
+test("on-screen decimal insertion respects the caret and selection without duplicate separators", () => {
+  assert.deepEqual(insertDecimalPoint(""), { value: "0.", caret: 2 });
+  assert.deepEqual(insertDecimalPoint("123"), { value: "123.", caret: 4 });
+  assert.deepEqual(insertDecimalPoint("1234", 2), { value: "12.34", caret: 3 });
+  assert.deepEqual(insertDecimalPoint("50", 0), { value: "0.50", caret: 2 });
+  assert.deepEqual(insertDecimalPoint("12.34", 2, 3), {
+    value: "12.34",
+    caret: 3,
+  });
+  assert.deepEqual(insertDecimalPoint("12.34"), { value: "12.34", caret: 5 });
+  assert.deepEqual(insertDecimalPoint("12,34"), { value: "12,34", caret: 5 });
+  assert.deepEqual(insertDecimalPoint("1234", 0, 4), { value: "0.", caret: 2 });
+  assert.equal(parseAmount(`${insertDecimalPoint("12").value}34`, "DKK"), 1234);
 });
 
 test("management entries change only the balance, using their registration FX", () => {
