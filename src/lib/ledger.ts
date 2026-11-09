@@ -14,6 +14,8 @@ export const CATEGORIES = {
 
 export type Category = string;
 export type CustomCategory = { id: string; label: string };
+export type Asset = { id: string; label: string };
+export const DEFAULT_ASSET: Asset = { id: "default", label: "기본 자산" };
 export const CATEGORY_COLORS = [
   "#3182f6",
   "#f5a524",
@@ -59,7 +61,9 @@ export type RateSnapshot = {
 };
 export type Transaction = {
   id: string;
-  type: "expense" | "income";
+  assetId: string;
+  type: "expense" | "income" | "transfer";
+  toAssetId?: string;
   title: string;
   amountMinor: number;
   currency: string;
@@ -75,11 +79,12 @@ export type Ledger = {
   currencies: string[];
   displayCurrency: string;
   customCategories: CustomCategory[];
+  assets: Asset[];
   transactions: Transaction[];
 };
 
 export const isManagement = (transaction: Transaction) =>
-  transaction.category === "management";
+  transaction.type !== "transfer" && transaction.category === "management";
 
 export const currencyNames = new Intl.DisplayNames(["ko"], {
   type: "currency",
@@ -123,6 +128,7 @@ export function newLedger(): Ledger {
     currencies: [...DEFAULT_CURRENCIES],
     displayCurrency: "DKK",
     customCategories: [],
+    assets: [{ ...DEFAULT_ASSET }],
     transactions: [],
   };
 }
@@ -175,15 +181,24 @@ export function convertedMinor(
   return Number.isSafeInteger(value) ? value : null;
 }
 
-export function totals(transactions: Transaction[], currency: string) {
+export function totals(
+  transactions: Transaction[],
+  currency: string,
+  assetId = "",
+) {
   let income = 0,
     expense = 0,
     balance = 0,
     missing = 0;
-  for (const transaction of transactions) {
+  for (const transaction of assetTransactions(transactions, assetId)) {
+    if (transaction.type === "transfer" && !assetId) continue;
     const value = convertedMinor(transaction, currency);
     if (value === null) {
       missing++;
+      continue;
+    }
+    if (transaction.type === "transfer") {
+      balance += transaction.assetId === assetId ? -value : value;
       continue;
     }
     balance += transaction.type === "income" ? value : -value;
@@ -192,6 +207,20 @@ export function totals(transactions: Transaction[], currency: string) {
     else expense += value;
   }
   return { income, expense, balance, missing };
+}
+
+export function assetTransactions(
+  transactions: Transaction[],
+  assetId: string,
+) {
+  return assetId
+    ? transactions.filter(
+        (transaction) =>
+          transaction.assetId === assetId ||
+          (transaction.type === "transfer" &&
+            transaction.toAssetId === assetId),
+      )
+    : transactions;
 }
 
 export function money(
@@ -257,6 +286,28 @@ export function parseLedger(raw: string): Ledger {
     !Array.isArray(value.transactions)
   )
     throw new Error("올바른 가계부 데이터가 아닙니다.");
+  const legacyAssets = value.assets === undefined;
+  const assets = legacyAssets ? [{ ...DEFAULT_ASSET }] : value.assets;
+  if (!Array.isArray(assets) || !assets.length)
+    throw new Error("자산 데이터를 읽을 수 없습니다.");
+  const assetIds = new Set<string>();
+  const assetLabels = new Set<string>();
+  for (const asset of assets) {
+    if (
+      !isRecord(asset) ||
+      typeof asset.id !== "string" ||
+      !/^(default|asset-[a-zA-Z0-9-]{1,64})$/.test(asset.id) ||
+      assetIds.has(asset.id) ||
+      typeof asset.label !== "string" ||
+      !asset.label.trim() ||
+      asset.label !== asset.label.trim() ||
+      asset.label.length > 30 ||
+      assetLabels.has(categoryLabelKey(asset.label))
+    )
+      throw new Error("자산 이름이 중복되거나 올바르지 않습니다.");
+    assetIds.add(asset.id);
+    assetLabels.add(categoryLabelKey(asset.label));
+  }
   // Old DB records and browser backups predate custom categories.
   const customCategories =
     value.customCategories === undefined ? [] : value.customCategories;
@@ -295,7 +346,17 @@ export function parseLedger(raw: string): Ledger {
       typeof transaction.id !== "string" ||
       !transaction.id ||
       ids.has(transaction.id) ||
-      !["income", "expense"].includes(String(transaction.type)) ||
+      (!(legacyAssets && transaction.assetId === undefined) &&
+        (typeof transaction.assetId !== "string" ||
+          !assetIds.has(transaction.assetId))) ||
+      !["income", "expense", "transfer"].includes(String(transaction.type)) ||
+      (transaction.type === "transfer"
+        ? legacyAssets ||
+          typeof transaction.toAssetId !== "string" ||
+          !assetIds.has(transaction.toAssetId) ||
+          transaction.toAssetId === transaction.assetId ||
+          transaction.category !== "management"
+        : transaction.toAssetId !== undefined) ||
       typeof transaction.title !== "string" ||
       !transaction.title.trim() ||
       transaction.title.length > 80 ||
@@ -320,14 +381,17 @@ export function parseLedger(raw: string): Ledger {
   // Preserve records from an existing user category named 관리항목.
   return {
     ...value,
+    assets,
     customCategories: customCategories.filter(
       (category) => !legacyManagementIds.has(category.id),
     ),
-    transactions: value.transactions.map((transaction) =>
-      legacyManagementIds.has(transaction.category)
-        ? { ...transaction, category: "management" }
-        : transaction,
-    ),
+    transactions: value.transactions.map((transaction) => ({
+      ...transaction,
+      assetId: transaction.assetId ?? DEFAULT_ASSET.id,
+      category: legacyManagementIds.has(transaction.category)
+        ? "management"
+        : transaction.category,
+    })),
   } as Ledger;
 }
 
@@ -431,6 +495,7 @@ export function demoTransactions(month: string): Transaction[] {
   return entries.map(
     ([title, amountMinor, currency, category, date, type], i) => ({
       id: `demo-${i}`,
+      assetId: DEFAULT_ASSET.id,
       title: title.replace("11월", `${Number(month.slice(-2))}월`),
       amountMinor,
       currency,

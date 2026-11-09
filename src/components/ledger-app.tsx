@@ -12,6 +12,7 @@ import {
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  ArrowRightLeft,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -37,6 +38,7 @@ import {
 } from "lucide-react";
 import {
   STORAGE_KEY,
+  assetTransactions,
   categoryInfo,
   categoryLabelKey,
   categoryOptions,
@@ -55,6 +57,7 @@ import {
   today,
   totals,
   validSnapshot,
+  type Asset,
   type Category,
   type CustomCategory,
   type Ledger,
@@ -70,10 +73,11 @@ import {
 import { periodTransactions, type PeriodMode } from "@/lib/ledger-analytics";
 import LedgerCharts from "./ledger-charts";
 
-type Tab = "home" | "transactions" | "settings";
+type Tab = "home" | "transactions" | "assets" | "settings";
 const navigation: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "home", label: "홈", icon: House },
   { id: "transactions", label: "내역", icon: List },
+  { id: "assets", label: "자산", icon: Wallet },
   { id: "settings", label: "설정", icon: Settings2 },
 ];
 const categoryIcons: Record<string, LucideIcon> = {
@@ -246,9 +250,99 @@ function CategoryCreator({
   );
 }
 
+function AssetEditor({
+  asset,
+  canDelete,
+  onSave,
+  remove,
+  close,
+}: {
+  asset: Asset | null;
+  canDelete: boolean;
+  onSave: (label: string) => Promise<void>;
+  remove: () => Promise<void>;
+  close: () => void;
+}) {
+  const [name, setName] = useState(asset?.label ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const persist = async (deleting = false) => {
+    setSaving(true);
+    setError("");
+    try {
+      if (deleting) await remove();
+      else await onSave(name.trim());
+      close();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "자산을 저장하지 못했어요.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Modal
+      title={asset ? "자산 관리" : "자산 추가"}
+      close={() => {
+        if (!saving) close();
+      }}
+    >
+      <form
+        className="editor-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void persist();
+        }}
+      >
+        <label className="form-field">
+          자산 이름
+          <input
+            autoFocus
+            required
+            maxLength={30}
+            placeholder="예: 생활비 통장, 현금, 저축"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          className="button button-primary full-width"
+          disabled={saving || !name.trim()}
+        >
+          {saving ? "저장 중…" : asset ? "이름 변경" : "추가하기"}
+        </button>
+        {asset && (
+          <>
+            <button
+              type="button"
+              className="button button-soft full-width"
+              disabled={saving || !canDelete}
+              onClick={() => void persist(true)}
+            >
+              자산 삭제
+            </button>
+            <p className="footnote">
+              거래가 없는 자산만 삭제할 수 있어요. 자산은 최소 하나가 필요해요.
+            </p>
+          </>
+        )}
+      </form>
+    </Modal>
+  );
+}
+
 function TransactionEditor({
   transaction,
   currencies,
+  assets,
+  initialAssetId,
+  initialCategory,
   customCategories,
   onAddCategory,
   onSave,
@@ -256,13 +350,28 @@ function TransactionEditor({
 }: {
   transaction: Transaction | null;
   currencies: string[];
+  assets: Asset[];
+  initialAssetId: string;
+  initialCategory: Category;
   customCategories: CustomCategory[];
   onAddCategory: (label: string) => Promise<string>;
   onSave: (transaction: Transaction) => Promise<void>;
   close: () => void;
 }) {
-  const [type, setType] = useState<"expense" | "income">(
-    transaction?.type ?? "expense",
+  const [type, setType] = useState<Transaction["type"]>(
+    transaction?.type ??
+      (initialCategory === "management" ? "income" : "expense"),
+  );
+  const [assetId, setAssetId] = useState(
+    transaction?.assetId ?? (initialAssetId || assets[0].id),
+  );
+  const [toAssetId, setToAssetId] = useState(
+    transaction?.toAssetId ??
+      assets.find(
+        (asset) =>
+          asset.id !== (transaction?.assetId || initialAssetId || assets[0].id),
+      )?.id ??
+      "",
   );
   const [currency, setCurrency] = useState(transaction?.currency ?? "DKK");
   const [amount, setAmount] = useState(
@@ -275,7 +384,9 @@ function TransactionEditor({
   const amountInput = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(transaction?.title ?? "");
   const [category, setCategory] = useState<Category>(
-    transaction?.category ?? "food",
+    transaction?.type === "transfer"
+      ? "food"
+      : (transaction?.category ?? initialCategory),
   );
   const [date, setDate] = useState(transaction?.date ?? today());
   const [note, setNote] = useState(transaction?.note ?? "");
@@ -352,13 +463,24 @@ function TransactionEditor({
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    if (!assets.some((asset) => asset.id === assetId)) {
+      setError("자산을 선택해 주세요.");
+      return;
+    }
+    if (
+      type === "transfer" &&
+      (!assets.some((asset) => asset.id === toAssetId) || assetId === toAssetId)
+    ) {
+      setError("서로 다른 보내는 자산과 받는 자산을 선택해 주세요.");
+      return;
+    }
     if (!amountMinor) {
       setError(
         `금액을 확인해 주세요. ${currency}는 소수점 ${fractionDigits(currency)}자리까지 입력할 수 있어요.`,
       );
       return;
     }
-    if (!title.trim()) {
+    if (!title.trim() && type !== "transfer") {
       setError("거래 이름을 입력해 주세요.");
       return;
     }
@@ -406,11 +528,13 @@ function TransactionEditor({
         );
       const result: Transaction = {
         id: draftId,
+        assetId,
         type,
-        title: title.trim(),
+        ...(type === "transfer" ? { toAssetId } : {}),
+        title: title.trim() || "자산 간 이체",
         amountMinor,
         currency,
-        category,
+        category: type === "transfer" ? "management" : category,
         date,
         note: note.trim(),
         createdAt: (draftCreatedAt.current ??= new Date().toISOString()),
@@ -438,7 +562,7 @@ function TransactionEditor({
       className="editor-modal"
     >
       <form id="transaction-form" className="editor-form" onSubmit={submit}>
-        <div className="type-switch">
+        <div className="type-switch" aria-label="내역 유형 선택">
           <button
             type="button"
             className={type === "expense" ? "selected" : ""}
@@ -457,7 +581,24 @@ function TransactionEditor({
             <ArrowDownLeft size={17} />
             {category === "management" ? "잔액 추가" : "수입"}
           </button>
+          <button
+            type="button"
+            className={type === "transfer" ? "selected" : ""}
+            aria-pressed={type === "transfer"}
+            onClick={() => {
+              setType("transfer");
+              setAddingCategory(false);
+            }}
+          >
+            <ArrowRightLeft size={17} /> 이체
+          </button>
         </div>
+        {type === "transfer" && (
+          <p className="section-description">
+            선택한 통화의 금액을 보내는 자산에서 빼고 받는 자산에 더해요.
+            수입·지출 합계와 그래프에는 포함하지 않아요.
+          </p>
+        )}
         <div className="amount-label-row">
           <label className="field-label" htmlFor="amount">
             금액
@@ -518,52 +659,99 @@ function TransactionEditor({
           </div>
         )}
         <label className="form-field">
+          {type === "transfer" ? "보내는 자산" : "자산"}
+          <select
+            value={assetId}
+            onChange={(event) => {
+              setAssetId(event.target.value);
+              if (event.target.value === toAssetId) setToAssetId("");
+            }}
+          >
+            {assets.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {type === "transfer" && (
+          <label className="form-field">
+            받는 자산
+            <select
+              value={toAssetId}
+              onChange={(event) => setToAssetId(event.target.value)}
+              required
+            >
+              <option value="">받는 자산 선택</option>
+              {assets
+                .filter((asset) => asset.id !== assetId)
+                .map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+        {type === "transfer" && assets.length < 2 && (
+          <p className="footnote">
+            자산 탭에서 자산을 하나 더 추가한 뒤 이체할 수 있어요.
+          </p>
+        )}
+        <label className="form-field">
           내용
+          {type === "transfer" && <span className="optional">선택</span>}
           <input
-            placeholder="예: 점심 식사"
+            placeholder={type === "transfer" ? "자산 간 이체" : "예: 점심 식사"}
             maxLength={80}
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            required
+            required={type !== "transfer"}
           />
         </label>
         <div className="form-grid">
-          <label className="form-field">
-            카테고리
-            <select
-              value={category}
-              onChange={(event) => setCategory(event.target.value as Category)}
-            >
-              {categoryOptions(customCategories).map((data) => (
-                <option key={data.id} value={data.id}>
-                  {data.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {category === "management" && (
+          {type !== "transfer" && (
+            <label className="form-field">
+              카테고리
+              <select
+                value={category}
+                onChange={(event) =>
+                  setCategory(event.target.value as Category)
+                }
+              >
+                {categoryOptions(customCategories).map((data) => (
+                  <option key={data.id} value={data.id}>
+                    {data.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {type !== "transfer" && category === "management" && (
             <p className="footnote">
-              전체 잔액에만 반영해요. 수입·지출 합계와 그래프에서는 제외돼요.
+              선택한 자산의 잔액에 반영해요. 수입·지출 합계와 그래프에서는
+              제외돼요.
             </p>
           )}
-          {addingCategory ? (
-            <CategoryCreator
-              onAdd={async (name) => {
-                const id = await onAddCategory(name);
-                setCategory(id);
-                return id;
-              }}
-              close={() => setAddingCategory(false)}
-            />
-          ) : (
-            <button
-              className="text-button add-category-button"
-              type="button"
-              onClick={() => setAddingCategory(true)}
-            >
-              <Plus size={18} /> 카테고리 추가
-            </button>
-          )}
+          {type !== "transfer" &&
+            (addingCategory ? (
+              <CategoryCreator
+                onAdd={async (name) => {
+                  const id = await onAddCategory(name);
+                  setCategory(id);
+                  return id;
+                }}
+                close={() => setAddingCategory(false)}
+              />
+            ) : (
+              <button
+                className="text-button add-category-button"
+                type="button"
+                onClick={() => setAddingCategory(true)}
+              >
+                <Plus size={18} /> 카테고리 추가
+              </button>
+            ))}
           <label className="form-field">
             거래 날짜
             <input
@@ -657,7 +845,12 @@ function TransactionEditor({
         )}
         <button
           className="button button-primary full-width"
-          disabled={saving || addingCategory || (loading && !manual)}
+          disabled={
+            saving ||
+            addingCategory ||
+            (loading && !manual) ||
+            (type === "transfer" && assets.length < 2)
+          }
           type="submit"
           form="transaction-form"
         >
@@ -672,12 +865,16 @@ function TransactionRows({
   transactions,
   currency,
   customCategories,
+  assets,
+  assetId = "",
   onSelect,
   emptyText = "아직 내역이 없어요",
 }: {
   transactions: Transaction[];
   currency: string;
   customCategories: CustomCategory[];
+  assets: Asset[];
+  assetId?: string;
   onSelect: (transaction: Transaction) => void;
   emptyText?: string;
 }) {
@@ -686,29 +883,56 @@ function TransactionRows({
     <div className="transaction-list">
       {transactions.map((transaction) => {
         const converted = convertedMinor(transaction, currency);
+        const transfer = transaction.type === "transfer";
+        const incoming =
+          transaction.type === "income" ||
+          (transfer && transaction.toAssetId === assetId);
         return (
           <button
             className="transaction-row"
             key={transaction.id}
             onClick={() => onSelect(transaction)}
           >
-            <CategoryIcon
-              category={transaction.category}
-              customCategories={customCategories}
-            />
+            {transfer ? (
+              <span className="category-icon">
+                <ArrowRightLeft size={20} />
+              </span>
+            ) : (
+              <CategoryIcon
+                category={transaction.category}
+                customCategories={customCategories}
+              />
+            )}
             <span className="transaction-info">
               <strong>{transaction.title}</strong>
               <span>
                 {Number(transaction.date.slice(5, 7))}.
                 {transaction.date.slice(8)} ·{" "}
-                {categoryInfo(transaction.category, customCategories).label}
+                {transfer
+                  ? "이체"
+                  : categoryInfo(transaction.category, customCategories).label}
+                {" · "}
+                {
+                  assets.find((asset) => asset.id === transaction.assetId)
+                    ?.label
+                }
+                {transfer && (
+                  <>
+                    {" "}
+                    →{" "}
+                    {
+                      assets.find((asset) => asset.id === transaction.toAssetId)
+                        ?.label
+                    }
+                  </>
+                )}
               </span>
             </span>
             <span
-              className={`transaction-amount ${transaction.type === "income" ? "income-text" : ""}`}
+              className={`transaction-amount ${incoming ? "income-text" : ""}`}
             >
               <strong>
-                {transaction.type === "income" ? "+" : "−"}
+                {transfer && !assetId ? "↔" : incoming ? "+" : "−"}
                 {money(transaction.amountMinor, transaction.currency)}
                 <small>{transaction.currency}</small>
               </strong>
@@ -731,6 +955,7 @@ function TransactionDetail({
   transaction,
   currency,
   customCategories,
+  assets,
   close,
   edit,
   remove,
@@ -738,6 +963,7 @@ function TransactionDetail({
   transaction: Transaction;
   currency: string;
   customCategories: CustomCategory[];
+  assets: Asset[];
   close: () => void;
   edit: () => void;
   remove: () => Promise<void>;
@@ -756,7 +982,11 @@ function TransactionDetail({
       <div className="detail-hero">
         <span>{transaction.title}</span>
         <strong className={transaction.type === "income" ? "income-text" : ""}>
-          {transaction.type === "income" ? "+" : "−"}
+          {transaction.type === "transfer"
+            ? "↔"
+            : transaction.type === "income"
+              ? "+"
+              : "−"}
           {money(transaction.amountMinor, transaction.currency)}
           <small>{transaction.currency}</small>
         </strong>
@@ -770,21 +1000,44 @@ function TransactionDetail({
       </div>
       <dl className="detail-list">
         <div>
-          <dt>유형</dt>
+          <dt>{transaction.type === "transfer" ? "보내는 자산" : "자산"}</dt>
           <dd>
-            {isManagement(transaction)
-              ? transaction.type === "income"
-                ? "잔액 추가"
-                : "잔액 차감"
-              : transaction.type === "income"
-                ? "수입"
-                : "지출"}
+            {assets.find((asset) => asset.id === transaction.assetId)?.label}
           </dd>
         </div>
+        {transaction.type === "transfer" && (
+          <div>
+            <dt>받는 자산</dt>
+            <dd>
+              {
+                assets.find((asset) => asset.id === transaction.toAssetId)
+                  ?.label
+              }
+            </dd>
+          </div>
+        )}
         <div>
-          <dt>카테고리</dt>
-          <dd>{categoryInfo(transaction.category, customCategories).label}</dd>
+          <dt>유형</dt>
+          <dd>
+            {transaction.type === "transfer"
+              ? "이체"
+              : isManagement(transaction)
+                ? transaction.type === "income"
+                  ? "잔액 추가"
+                  : "잔액 차감"
+                : transaction.type === "income"
+                  ? "수입"
+                  : "지출"}
+          </dd>
         </div>
+        {transaction.type !== "transfer" && (
+          <div>
+            <dt>카테고리</dt>
+            <dd>
+              {categoryInfo(transaction.category, customCategories).label}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>날짜</dt>
           <dd>{transaction.date}</dd>
@@ -797,7 +1050,15 @@ function TransactionDetail({
         )}
       </dl>
       {isManagement(transaction) && (
-        <p className="footnote">전체 잔액에만 반영되는 관리항목이에요.</p>
+        <p className="footnote">
+          선택한 자산의 잔액에 반영되는 관리항목이에요.
+        </p>
+      )}
+      {transaction.type === "transfer" && (
+        <p className="footnote">
+          이체를 수정하거나 삭제하면 양쪽 자산의 잔액에 함께 반영돼요. 수입·지출
+          합계에는 포함하지 않아요.
+        </p>
       )}
       <details className="rate-notice">
         <summary>
@@ -1184,6 +1445,9 @@ export default function LedgerApp() {
   const [month, setMonth] = useState(monthKey);
   const [periodMode, setPeriodMode] = useState<PeriodMode>("month");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedAsset, setSelectedAsset] = useState("");
+  const [assetEditor, setAssetEditor] = useState<Asset | null | undefined>();
+  const [editorCategory, setEditorCategory] = useState<Category>("food");
   const [editor, setEditor] = useState<Transaction | null | undefined>();
   const [detail, setDetail] = useState<Transaction | null>(null);
   const [toast, setToast] = useState("");
@@ -1194,6 +1458,11 @@ export default function LedgerApp() {
   const [rateError, setRateError] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
   const ledger = remote?.ledger ?? null;
+  const activeAssetId = ledger?.assets.some(
+    (asset) => asset.id === selectedAsset,
+  )
+    ? selectedAsset
+    : "";
   const refresh = useCallback(async () => {
     setRateLoading(true);
     setRateError("");
@@ -1297,9 +1566,13 @@ export default function LedgerApp() {
       setSaving(false);
     }
   };
+  const scopedTransactions = useMemo(
+    () => assetTransactions(ledger?.transactions ?? [], activeAssetId),
+    [ledger, activeAssetId],
+  );
   const period = useMemo(
-    () => periodTransactions(ledger?.transactions ?? [], month, periodMode),
-    [ledger, month, periodMode],
+    () => periodTransactions(scopedTransactions, month, periodMode),
+    [scopedTransactions, month, periodMode],
   );
   if (!ledger)
     return (
@@ -1318,13 +1591,27 @@ export default function LedgerApp() {
       </main>
     );
   const currency = ledger.displayCurrency;
-  const summary = totals(period, currency);
-  const overall = totals(ledger.transactions, currency);
+  const summary = totals(period, currency, activeAssetId);
+  const overall = totals(scopedTransactions, currency, activeAssetId);
   const matching = period.filter(
     (item) =>
       (!selectedCategories.length ||
-        selectedCategories.includes(item.category)) &&
-      `${item.title} ${item.note} ${item.currency} ${categoryInfo(item.category, ledger.customCategories).label}`
+        (item.type !== "transfer" &&
+          selectedCategories.includes(item.category))) &&
+      [
+        item.title,
+        item.note,
+        item.currency,
+        item.type === "transfer"
+          ? "이체"
+          : categoryInfo(item.category, ledger.customCategories).label,
+        ...ledger.assets
+          .filter(
+            (asset) => asset.id === item.assetId || asset.id === item.toAssetId,
+          )
+          .map((asset) => asset.label),
+      ]
+        .join(" ")
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
@@ -1339,6 +1626,35 @@ export default function LedgerApp() {
     setTab(next);
     if (next === "settings" && !rates && !rateLoading) void refresh();
     window.scrollTo({ top: 0 });
+  };
+  const openEditor = (category: Category = "food") => {
+    setEditorCategory(category);
+    setEditor(null);
+  };
+  const saveAsset = async (label: string) => {
+    if (!label || label.length > 30)
+      throw new Error("자산 이름을 1~30자로 입력해 주세요.");
+    if (
+      ledger.assets.some(
+        (asset) =>
+          asset.id !== assetEditor?.id &&
+          categoryLabelKey(asset.label) === categoryLabelKey(label),
+      )
+    )
+      throw new Error("이미 있는 자산 이름이에요.");
+    const asset = {
+      id:
+        assetEditor?.id ??
+        `asset-${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+      label,
+    };
+    await commit({
+      ...ledger,
+      assets: assetEditor
+        ? ledger.assets.map((item) => (item.id === asset.id ? asset : item))
+        : [...ledger.assets, asset],
+    });
+    setToast(assetEditor ? "자산 이름을 변경했어요" : "자산을 추가했어요");
   };
   const save = async (transaction: Transaction) => {
     const existing = ledger.transactions;
@@ -1513,8 +1829,22 @@ export default function LedgerApp() {
             </button>
           </div>
         )}
-        {tab !== "settings" && (
+        {(tab === "home" || tab === "transactions") && (
           <>
+            <label className="form-field asset-filter">
+              조회 자산
+              <select
+                value={activeAssetId}
+                onChange={(event) => setSelectedAsset(event.target.value)}
+              >
+                <option value="">전체 자산</option>
+                {ledger.assets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="period-switch" aria-label="조회 기간">
               <button
                 aria-pressed={periodMode === "month"}
@@ -1634,7 +1964,7 @@ export default function LedgerApp() {
                   </strong>
                 </div>
                 <div>
-                  <span>전체 잔액</span>
+                  <span>{activeAssetId ? "자산 잔액" : "전체 잔액"}</span>
                   <strong>
                     {money(overall.balance, currency)}
                     <small>{currency}</small>
@@ -1642,14 +1972,14 @@ export default function LedgerApp() {
                 </div>
               </div>
               <p className="footnote">
-                전체 잔액은 모든 기간의 관리항목을 포함해요.
+                잔액은 조회 자산의 모든 기간 내역과 관리항목을 포함해요.
                 {overall.missing > 0
                   ? ` 환산 환율이 없는 ${overall.missing}건은 제외했어요.`
                   : ""}
               </p>
               <button
                 className="button button-primary full-width"
-                onClick={() => setEditor(null)}
+                onClick={() => openEditor()}
               >
                 <Plus size={21} />
                 내역 추가
@@ -1670,6 +2000,8 @@ export default function LedgerApp() {
                 transactions={period.slice(0, 5)}
                 currency={currency}
                 customCategories={ledger.customCategories}
+                assets={ledger.assets}
+                assetId={activeAssetId}
                 onSelect={setDetail}
               />
               <p className="footnote">
@@ -1684,10 +2016,6 @@ export default function LedgerApp() {
               <h1>
                 내역 <span className="count">{filtered.length}</span>
               </h1>
-              <button className="text-button" onClick={() => setEditor(null)}>
-                <Plus size={20} />
-                추가
-              </button>
             </div>
             <label className="search-field">
               <Search size={20} />
@@ -1703,46 +2031,57 @@ export default function LedgerApp() {
                 ["all", "전체"],
                 ["expense", "지출"],
                 ["income", "수입"],
+                ["transfer", "이체"],
                 ["management", "관리항목"],
               ].map(([value, label]) => (
                 <button
                   key={value}
                   aria-pressed={filter === value}
                   className={filter === value ? "selected" : ""}
-                  onClick={() => setFilter(value)}
+                  onClick={() => {
+                    setFilter(value);
+                    if (value === "transfer") setSelectedCategories([]);
+                  }}
                 >
                   {label}
                 </button>
               ))}
             </div>
-            <div className="category-chips" aria-label="카테고리 필터">
-              <button
-                aria-pressed={!selectedCategories.length}
-                className={!selectedCategories.length ? "selected" : ""}
-                onClick={() => setSelectedCategories([])}
-              >
-                모든 카테고리
-              </button>
-              {categoryOptions(ledger.customCategories).map((category) => (
+            {filter !== "transfer" && (
+              <div className="category-chips" aria-label="카테고리 필터">
                 <button
-                  key={category.id}
-                  aria-pressed={selectedCategories.includes(category.id)}
-                  className={
-                    selectedCategories.includes(category.id) ? "selected" : ""
-                  }
-                  onClick={() =>
-                    setSelectedCategories((current) =>
-                      current.includes(category.id)
-                        ? current.filter((id) => id !== category.id)
-                        : [...current, category.id],
-                    )
-                  }
+                  aria-pressed={!selectedCategories.length}
+                  className={!selectedCategories.length ? "selected" : ""}
+                  onClick={() => setSelectedCategories([])}
                 >
-                  {category.label}
+                  모든 카테고리
                 </button>
-              ))}
-            </div>
-            {filter === "management" ? (
+                {categoryOptions(ledger.customCategories).map((category) => (
+                  <button
+                    key={category.id}
+                    aria-pressed={selectedCategories.includes(category.id)}
+                    className={
+                      selectedCategories.includes(category.id) ? "selected" : ""
+                    }
+                    onClick={() =>
+                      setSelectedCategories((current) =>
+                        current.includes(category.id)
+                          ? current.filter((id) => id !== category.id)
+                          : [...current, category.id],
+                      )
+                    }
+                  >
+                    {category.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {filter === "transfer" ? (
+              <p className="footnote">
+                자산 간 이체 내역이에요. 수입·지출 합계와 그래프에는 포함하지
+                않아요.
+              </p>
+            ) : filter === "management" ? (
               <p className="footnote">
                 관리항목은 전체 잔액에만 반영돼요. 수입·지출 합계와 그래프에서는
                 제외돼요.
@@ -1766,6 +2105,8 @@ export default function LedgerApp() {
               transactions={filtered}
               currency={currency}
               customCategories={ledger.customCategories}
+              assets={ledger.assets}
+              assetId={activeAssetId}
               onSelect={setDetail}
               emptyText={
                 query || filter !== "all" || selectedCategories.length
@@ -1790,6 +2131,86 @@ export default function LedgerApp() {
             onAddCategory={addCategory}
           />
         )}
+        {tab === "assets" && (
+          <div className="assets-page">
+            <div className="section-heading">
+              <h1>자산</h1>
+              <button
+                className="text-button"
+                disabled={saving}
+                onClick={() => setAssetEditor(null)}
+              >
+                <Plus size={20} /> 추가
+              </button>
+            </div>
+            <p className="section-description">
+              전체 기간 · 관리항목 포함 · {currency} 환산
+            </p>
+            <p className="footnote">
+              처음 보유한 금액은 ‘잔액 조정’으로 입력해 주세요. 거래를 수정하면
+              다른 자산으로 옮길 수 있어요.
+            </p>
+            {ledger.assets.map((asset) => {
+              const transactions = assetTransactions(
+                ledger.transactions,
+                asset.id,
+              );
+              const balance = totals(transactions, currency, asset.id);
+              return (
+                <section key={asset.id} className="asset-card">
+                  <div className="section-heading">
+                    <h2>{asset.label}</h2>
+                    <button
+                      className="text-button"
+                      disabled={saving}
+                      aria-label={`${asset.label} 관리`}
+                      onClick={() => setAssetEditor(asset)}
+                    >
+                      관리
+                    </button>
+                  </div>
+                  <p className="asset-balance">
+                    {balance.missing > 0 &&
+                    balance.missing === transactions.length
+                      ? "—"
+                      : money(balance.balance, currency)}{" "}
+                    <small>{currency}</small>
+                  </p>
+                  {balance.missing > 0 && (
+                    <p className="footnote">
+                      환산 환율이 없는 {balance.missing}건은 제외했어요.
+                    </p>
+                  )}
+                  <div className="asset-actions">
+                    <button
+                      className="button button-soft"
+                      onClick={() => {
+                        setSelectedAsset(asset.id);
+                        setQuery("");
+                        setSelectedCategories([]);
+                        setFilter("all");
+                        navigate("transactions");
+                      }}
+                    >
+                      내역 보기
+                    </button>
+                    <button
+                      className="button button-soft"
+                      disabled={saving}
+                      onClick={() => {
+                        setSelectedAsset(asset.id);
+                        openEditor("management");
+                      }}
+                    >
+                      잔액 조정
+                    </button>
+                  </div>
+                </section>
+              );
+            })}
+            <p className="footnote">각 거래의 등록 당시 환율로 계산해요.</p>
+          </div>
+        )}
       </main>
       <nav className="bottom-nav" aria-label="메뉴">
         {navigation.map(({ id, label, icon: Icon }) => (
@@ -1808,10 +2229,37 @@ export default function LedgerApp() {
         <TransactionEditor
           transaction={editor}
           currencies={ledger.currencies}
+          assets={ledger.assets}
+          initialAssetId={activeAssetId}
+          initialCategory={editorCategory}
           customCategories={ledger.customCategories}
           onAddCategory={addCategory}
           onSave={save}
           close={() => setEditor(undefined)}
+        />
+      )}
+      {assetEditor !== undefined && (
+        <AssetEditor
+          asset={assetEditor}
+          canDelete={
+            ledger.assets.length > 1 &&
+            !ledger.transactions.some(
+              (item) =>
+                item.assetId === assetEditor?.id ||
+                item.toAssetId === assetEditor?.id,
+            )
+          }
+          onSave={saveAsset}
+          remove={async () => {
+            await commit({
+              ...ledger,
+              assets: ledger.assets.filter(
+                (asset) => asset.id !== assetEditor?.id,
+              ),
+            });
+            setToast("자산을 삭제했어요");
+          }}
+          close={() => setAssetEditor(undefined)}
         />
       )}
       {detail && (
@@ -1819,6 +2267,7 @@ export default function LedgerApp() {
           transaction={detail}
           currency={currency}
           customCategories={ledger.customCategories}
+          assets={ledger.assets}
           close={() => setDetail(null)}
           edit={() => {
             setEditor(detail);

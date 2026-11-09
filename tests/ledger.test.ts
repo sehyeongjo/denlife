@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  assetTransactions,
   convertedMinor,
   demoTransactions,
   isManagement,
@@ -13,7 +14,221 @@ import {
   shiftMonth,
   totals,
   validSnapshot,
+  type Transaction,
 } from "../src/lib/ledger.ts";
+
+test("a transfer moves both asset balances without changing income, expenses, or the combined balance", () => {
+  const base = demoTransactions("2026-11")[0];
+  const opening = {
+    ...base,
+    id: "opening",
+    category: "management",
+    amountMinor: 20000,
+  };
+  const transfer: Transaction = {
+    ...base,
+    id: "transfer",
+    type: "transfer",
+    assetId: "default",
+    toAssetId: "asset-cash",
+    category: "management",
+    currency: "USD",
+    amountMinor: 1000,
+    fx: { ...base.fx, rates: { DKK: 1, USD: 0.2 } },
+  };
+  const transactions = [opening, transfer];
+  assert.equal(isManagement(transfer), false);
+  assert.deepEqual(assetTransactions(transactions, "asset-cash"), [transfer]);
+  assert.deepEqual(totals(transactions, "DKK"), totals([opening], "DKK"));
+  for (const [currency, amount] of [
+    ["DKK", 5000],
+    ["USD", 1000],
+  ] as const) {
+    assert.deepEqual(totals([transfer], currency, "default"), {
+      income: 0,
+      expense: 0,
+      balance: -amount,
+      missing: 0,
+    });
+    assert.deepEqual(totals([transfer], currency, "asset-cash"), {
+      income: 0,
+      expense: 0,
+      balance: amount,
+      missing: 0,
+    });
+    assert.equal(totals([transfer], currency, "asset-other").balance, 0);
+  }
+  assert.equal(totals(transactions, "DKK", "default").balance, 15000);
+  assert.equal(totals(transactions, "DKK", "asset-cash").balance, 5000);
+  const edited = { ...transfer, amountMinor: 2000 };
+  assert.equal(totals([opening, edited], "DKK", "default").balance, 10000);
+  assert.equal(totals([opening, edited], "DKK", "asset-cash").balance, 10000);
+  assert.equal(totals([opening], "DKK", "default").balance, 20000);
+  assert.equal(totals([opening], "DKK", "asset-cash").balance, 0);
+  assert.deepEqual(totals([transfer], "EUR"), {
+    income: 0,
+    expense: 0,
+    balance: 0,
+    missing: 0,
+  });
+  assert.equal(totals([transfer], "EUR", "asset-cash").missing, 1);
+});
+
+test("transfers validate both endpoints and cannot leave an orphaned asset reference", () => {
+  const transfer: Transaction = {
+    ...demoTransactions("2026-11")[0],
+    type: "transfer",
+    category: "management",
+    toAssetId: "asset-cash",
+  };
+  const ledger = {
+    ...newLedger(),
+    assets: [...newLedger().assets, { id: "asset-cash", label: "현금" }],
+    transactions: [transfer],
+  };
+  assert.deepEqual(parseLedger(JSON.stringify(ledger)), ledger);
+  for (const toAssetId of [
+    undefined,
+    null,
+    "default",
+    "asset-missing",
+    ["asset-cash"],
+  ])
+    assert.throws(() =>
+      parseLedger(
+        JSON.stringify({
+          ...ledger,
+          transactions: [{ ...transfer, toAssetId }],
+        }),
+      ),
+    );
+  for (const category of ["salary", "food"])
+    assert.throws(() =>
+      parseLedger(
+        JSON.stringify({
+          ...ledger,
+          transactions: [{ ...transfer, category }],
+        }),
+      ),
+    );
+  for (const type of ["income", "expense"])
+    assert.throws(() =>
+      parseLedger(
+        JSON.stringify({
+          ...ledger,
+          transactions: [{ ...transfer, type }],
+        }),
+      ),
+    );
+  assert.throws(() =>
+    parseLedger(JSON.stringify({ ...ledger, assets: newLedger().assets })),
+  );
+  assert.throws(() =>
+    parseLedger(JSON.stringify({ ...ledger, assets: [ledger.assets[1]] })),
+  );
+  assert.throws(() =>
+    parseLedger(JSON.stringify({ ...ledger, assets: undefined })),
+  );
+});
+
+test("legacy ledgers assign existing transactions to the default asset without changing money or snapshots", () => {
+  const ledger = { ...newLedger(), transactions: demoTransactions("2026-11") };
+  const { assets, ...legacy } = ledger;
+  const raw = JSON.stringify({
+    ...legacy,
+    transactions: legacy.transactions.map(
+      ({ assetId, ...transaction }) => transaction,
+    ),
+  });
+  const normalized = parseLedger(raw);
+  assert.deepEqual(normalized, ledger);
+  assert.deepEqual(parseLedger(JSON.stringify(normalized)), ledger);
+  assert.equal(JSON.parse(raw).transactions[0].assetId, undefined);
+});
+
+test("assets reject duplicate names, invalid IDs, and orphaned transactions", () => {
+  const ledger = {
+    ...newLedger(),
+    assets: [...newLedger().assets, { id: "asset-cash", label: "현금" }],
+    transactions: [
+      { ...demoTransactions("2026-11")[0], assetId: "asset-cash" },
+    ],
+  };
+  assert.deepEqual(parseLedger(JSON.stringify(ledger)), ledger);
+  for (const assets of [
+    [],
+    null,
+    [{ id: "invalid", label: "현금" }],
+    [...ledger.assets, { id: "asset-duplicate", label: "현금" }],
+    [...ledger.assets, { id: "asset-cash", label: "저축" }],
+    [{ id: "asset-cash", label: " 현금 " }],
+    [{ id: "asset-cash", label: " " }],
+    [{ id: "asset-cash", label: "a".repeat(31) }],
+    [
+      { id: "asset-bank", label: "Bank" },
+      { id: "asset-other", label: "ＢＡＮＫ" },
+    ],
+  ])
+    assert.throws(() => parseLedger(JSON.stringify({ ...ledger, assets })));
+  for (const assetId of [undefined, null, ["default"], "asset-missing"])
+    assert.throws(() =>
+      parseLedger(
+        JSON.stringify({
+          ...ledger,
+          transactions: [{ ...ledger.transactions[0], assetId }],
+        }),
+      ),
+    );
+  assert.throws(() =>
+    parseLedger(JSON.stringify({ ...ledger, assets: newLedger().assets })),
+  );
+  assert.doesNotThrow(() =>
+    parseLedger(JSON.stringify({ ...ledger, assets: [ledger.assets[1]] })),
+  );
+});
+
+test("asset filters separate balances, management entries, and currency conversion while preserving the total", () => {
+  const sample = demoTransactions("2026-11")[0];
+  const transactions = [
+    { ...sample, id: "opening", category: "management", amountMinor: 50000 },
+    { ...sample, id: "salary", amountMinor: 30000 },
+    { ...sample, id: "food", type: "expense" as const, amountMinor: 10000 },
+    {
+      ...sample,
+      id: "cash",
+      assetId: "asset-cash",
+      currency: "USD",
+      amountMinor: 1000,
+      fx: { ...sample.fx, rates: { DKK: 1, USD: 0.2 } },
+    },
+  ];
+  assert.deepEqual(totals(assetTransactions(transactions, "default"), "DKK"), {
+    income: 30000,
+    expense: 10000,
+    balance: 70000,
+    missing: 0,
+  });
+  assert.deepEqual(
+    totals(assetTransactions(transactions, "asset-cash"), "DKK"),
+    {
+      income: 5000,
+      expense: 0,
+      balance: 5000,
+      missing: 0,
+    },
+  );
+  assert.equal(
+    totals(assetTransactions(transactions, ""), "DKK").balance,
+    75000,
+  );
+  assert.deepEqual(assetTransactions(transactions, "asset-missing"), []);
+  const moved = transactions.map((item) => ({
+    ...item,
+    assetId: "asset-cash",
+  }));
+  assert.equal(totals(moved, "DKK").balance, 75000);
+  assert.equal(totals(assetTransactions(moved, "default"), "DKK").balance, 0);
+});
 
 test("currency precision and amount validation", () => {
   assert.equal(parseAmount("12.34", "DKK"), 1234);

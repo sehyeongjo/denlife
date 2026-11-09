@@ -9,7 +9,12 @@ import {
   readLedger,
   writeLedger,
 } from "../src/lib/database.ts";
-import { demoTransactions, newLedger, totals } from "../src/lib/ledger.ts";
+import {
+  demoTransactions,
+  newLedger,
+  totals,
+  type Transaction,
+} from "../src/lib/ledger.ts";
 
 test(
   "Neon persists CRUD and snapshots, rejects stale writes, and parameterizes user text",
@@ -30,20 +35,25 @@ test(
     try {
       const legacyLedger: Partial<ReturnType<typeof newLedger>> = newLedger();
       delete legacyLedger.customCategories;
+      delete legacyLedger.assets;
       await sql`INSERT INTO denlife_ledgers (id, data) VALUES (${id}, ${JSON.stringify(legacyLedger)}::jsonb)`;
       let current = await readLedger(id);
       assert.deepEqual(current.ledger.customCategories, []);
+      assert.deepEqual(current.ledger.assets, newLedger().assets);
       const customCategory = { id: "custom-integration", label: "여행" };
+      const asset = { id: "asset-integration", label: "생활비 통장" };
       const sample = {
         ...demoTransactions("2026-11")[0],
         id: randomUUID(),
         title: "'; DROP TABLE denlife_ledgers; --",
         category: customCategory.id,
+        assetId: asset.id,
       };
       current = await writeLedger(id, {
         ledger: {
           ...current.ledger,
           customCategories: [customCategory],
+          assets: [...current.ledger.assets, asset],
           transactions: [sample],
         },
         revision: current.revision,
@@ -52,14 +62,22 @@ test(
       const persisted = await readLedger(id);
       assert.deepEqual(persisted.ledger.transactions[0], sample);
       assert.deepEqual(persisted.ledger.customCategories, [customCategory]);
+      assert.deepEqual(persisted.ledger.assets, [...newLedger().assets, asset]);
+      await assert.rejects(
+        writeLedger(id, {
+          ...persisted,
+          ledger: { ...persisted.ledger, assets: newLedger().assets },
+        }),
+      );
       current = await writeLedger(id, {
         ledger: {
           ...current.ledger,
-          transactions: [{ ...sample, amountMinor: 12345 }],
+          transactions: [{ ...sample, amountMinor: 12345, assetId: "default" }],
         },
         revision: current.revision,
       });
       assert.equal(current.ledger.transactions[0].amountMinor, 12345);
+      assert.equal(current.ledger.transactions[0].assetId, "default");
       assert.deepEqual(current.ledger.transactions[0].fx, sample.fx);
       await assert.rejects(
         writeLedger(id, { ledger: newLedger(), revision: 0 }),
@@ -130,6 +148,80 @@ test(
         missing: 0,
       });
       assert.deepEqual(management.ledger.transactions[0].fx, sample.fx);
+      const transfer: Transaction = {
+        ...sample,
+        id: randomUUID(),
+        type: "transfer",
+        category: "management",
+        assetId: "default",
+        toAssetId: asset.id,
+        amountMinor: 5000,
+      };
+      current = await writeLedger(id, {
+        ...management,
+        ledger: {
+          ...management.ledger,
+          transactions: [...management.ledger.transactions, transfer],
+        },
+      });
+      const transferred = await readLedger(id);
+      assert.deepEqual(transferred.ledger.transactions[1], transfer);
+      assert.equal(
+        totals(transferred.ledger.transactions, "DKK").balance,
+        sample.amountMinor,
+      );
+      assert.equal(
+        totals(transferred.ledger.transactions, "DKK", "default").balance,
+        -5000,
+      );
+      assert.equal(
+        totals(transferred.ledger.transactions, "DKK", asset.id).balance,
+        sample.amountMinor + 5000,
+      );
+      await assert.rejects(
+        writeLedger(id, {
+          ...transferred,
+          ledger: { ...transferred.ledger, assets: newLedger().assets },
+        }),
+      );
+      current = await writeLedger(id, {
+        ...current,
+        ledger: {
+          ...current.ledger,
+          transactions: current.ledger.transactions.map((item) =>
+            item.id === transfer.id
+              ? {
+                  ...item,
+                  amountMinor: 2000,
+                  assetId: asset.id,
+                  toAssetId: "default",
+                }
+              : item,
+          ),
+        },
+      });
+      assert.equal(
+        totals(current.ledger.transactions, "DKK", "default").balance,
+        2000,
+      );
+      assert.equal(
+        totals(current.ledger.transactions, "DKK", asset.id).balance,
+        sample.amountMinor - 2000,
+      );
+      assert.deepEqual(current.ledger.transactions[1].fx, transfer.fx);
+      current = await writeLedger(id, {
+        ...current,
+        ledger: {
+          ...current.ledger,
+          transactions: current.ledger.transactions.filter(
+            (item) => item.id !== transfer.id,
+          ),
+        },
+      });
+      assert.deepEqual(
+        current.ledger.transactions,
+        management.ledger.transactions,
+      );
     } catch (error) {
       if (error instanceof AssertionError) throw error;
       throw new Error(

@@ -19,7 +19,7 @@ export function periodTransactions(
 export function categoryBreakdown(
   transactions: Transaction[],
   currency: string,
-  type: Transaction["type"],
+  type: Exclude<Transaction["type"], "transfer">,
 ) {
   const amounts = new Map<string, number>();
   let total = 0;
@@ -68,7 +68,7 @@ export function cashflowTrend(
   const byKey = new Map(points.map((point) => [point.key, point]));
   let missing = 0;
   for (const item of transactions) {
-    if (isManagement(item)) continue;
+    if (isManagement(item) || item.type === "transfer") continue;
     const point = byKey.get(
       mode === "year" ? item.date.slice(0, 7) : item.date,
     );

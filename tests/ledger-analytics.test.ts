@@ -153,3 +153,26 @@ test("management is excluded from both chart totals and percentages in month and
     );
   }
 });
+
+test("outgoing and incoming transfers are excluded from both charts in every period", () => {
+  const regular = [expense("food"), expense("salary", { type: "income" })];
+  const transfers = [
+    expense("transfer", {
+      type: "transfer",
+      category: "management",
+      toAssetId: "asset-cash",
+    }),
+  ];
+  for (const currency of ["DKK", "EUR"]) {
+    for (const type of ["income", "expense"] as const)
+      assert.deepEqual(
+        categoryBreakdown([...regular, ...transfers], currency, type),
+        categoryBreakdown(regular, currency, type),
+      );
+    for (const mode of ["month", "year"] as const)
+      assert.deepEqual(
+        cashflowTrend([...regular, ...transfers], currency, "2024-02", mode),
+        cashflowTrend(regular, currency, "2024-02", mode),
+      );
+  }
+});

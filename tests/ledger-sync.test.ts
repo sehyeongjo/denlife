@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { demoTransactions, newLedger } from "../src/lib/ledger.ts";
+import {
+  demoTransactions,
+  newLedger,
+  type Transaction,
+} from "../src/lib/ledger.ts";
 import { mergeLocalLedger, parseLedgerState } from "../src/lib/ledger-sync.ts";
 import { validateLedgerUpdate } from "../src/lib/database.ts";
 
@@ -77,6 +81,66 @@ test("migration preserves custom categories and remaps matching names to server 
   const merged = mergeLocalLedger(remote, local);
   assert.equal(merged.customCategories.length, 2);
   assert.equal(merged.transactions[0].category, "custom-server");
+  assert.deepEqual(
+    parseLedgerState({ ledger: merged, revision: 0 }).ledger,
+    merged,
+  );
+  assert.deepEqual(mergeLocalLedger(merged, local), merged);
+});
+
+test("migration preserves asset assignments, matches names, and keeps server records", () => {
+  const sample = demoTransactions("2026-11")[0];
+  const remote = {
+    ...newLedger(),
+    assets: [...newLedger().assets, { id: "asset-server", label: "Cash" }],
+    transactions: [{ ...sample, assetId: "asset-server" }],
+  };
+  const local = {
+    ...newLedger(),
+    assets: [
+      ...newLedger().assets,
+      { id: "asset-local", label: "cash" },
+      { id: "asset-savings", label: "저축" },
+    ],
+    transactions: [
+      sample,
+      { ...sample, id: "local-cash", assetId: "asset-local" },
+      { ...sample, id: "local-savings", assetId: "asset-savings" },
+    ],
+  };
+  const merged = mergeLocalLedger(remote, local);
+  assert.equal(merged.assets.length, 3);
+  assert.deepEqual(
+    merged.transactions.map((item) => item.assetId),
+    ["asset-server", "asset-server", "asset-savings"],
+  );
+  assert.deepEqual(
+    parseLedgerState({ ledger: merged, revision: 0 }).ledger,
+    merged,
+  );
+  assert.deepEqual(mergeLocalLedger(merged, local), merged);
+});
+
+test("migration remaps both transfer endpoints and preserves its registration snapshot", () => {
+  const remote = {
+    ...newLedger(),
+    assets: [...newLedger().assets, { id: "asset-server", label: "현금" }],
+  };
+  const transfer: Transaction = {
+    ...demoTransactions("2026-11")[0],
+    type: "transfer",
+    category: "management",
+    toAssetId: "asset-local",
+  };
+  const local = {
+    ...newLedger(),
+    assets: [...newLedger().assets, { id: "asset-local", label: "현금" }],
+    transactions: [transfer],
+  };
+  const merged = mergeLocalLedger(remote, local);
+  assert.equal(merged.transactions[0].toAssetId, "asset-server");
+  assert.equal(merged.transactions[0].assetId, "default");
+  assert.deepEqual(merged.transactions[0].fx, transfer.fx);
   assert.deepEqual(
     parseLedgerState({ ledger: merged, revision: 0 }).ledger,
     merged,

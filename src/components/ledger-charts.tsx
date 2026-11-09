@@ -33,7 +33,7 @@ export default function LedgerCharts({
   customCategories: CustomCategory[];
   month: string;
   mode: PeriodMode;
-  breakdownType: Transaction["type"];
+  breakdownType: Exclude<Transaction["type"], "transfer">;
 }) {
   const chartId = useId();
   const [activeKey, setActiveKey] = useState("");
@@ -197,8 +197,8 @@ export default function LedgerCharts({
           <p className="chart-empty">이 기간에 환산 가능한 내역이 없어요.</p>
         )}
         <p className="footnote">
-          검색·카테고리 조건에 맞는 수입과 지출이에요. 그래프를 누르면 금액을 볼
-          수 있어요. 관리항목은 제외돼요.
+          자산·검색·카테고리 조건에 맞는 수입과 지출이에요. 그래프를 누르면
+          금액을 볼 수 있어요. 관리항목과 이체는 제외돼요.
         </p>
         {missing > 0 && (
           <p className="chart-warning">
