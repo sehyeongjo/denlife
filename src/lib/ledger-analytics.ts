@@ -6,6 +6,7 @@ import {
 } from "./ledger.ts";
 
 export type PeriodMode = "month" | "year";
+const INITIAL_SPENDING_ID = "initial-expense-2026-11";
 
 export function periodTransactions(
   transactions: Transaction[],
@@ -67,6 +68,49 @@ export function withInitialSalary(
   ];
 }
 
+export function reportingTransactions(
+  transactions: Transaction[],
+  assetId = "",
+): Transaction[] {
+  const entries = withInitialSalary(transactions, assetId);
+  if (
+    (assetId && assetId !== DEFAULT_ASSET.id) ||
+    entries.some((item) => item.id === INITIAL_SPENDING_ID)
+  )
+    return entries;
+  const initialDate = "2026-11-01";
+  const salary = entries
+    .filter(
+      (item) =>
+        item.type === "income" &&
+        item.category === "salary" &&
+        item.date <= initialDate,
+    )
+    .sort(
+      (a, b) =>
+        b.date.localeCompare(a.date) ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    )[0];
+  if (!salary) return entries;
+  return [
+    ...entries,
+    {
+      ...salary,
+      id: INITIAL_SPENDING_ID,
+      assetId: DEFAULT_ASSET.id,
+      type: "expense",
+      category: "other",
+      title: "기록 전 생활비",
+      date: initialDate,
+      createdAt: `${initialDate}T00:00:00Z`,
+      amountMinor: 785_842,
+      currency: "DKK",
+      note: "",
+    },
+  ];
+}
+
 export function livingBudget(
   transactions: Transaction[],
   currency: string,
@@ -74,7 +118,7 @@ export function livingBudget(
   assetId = "",
   period?: string,
 ) {
-  const entries = withInitialSalary(transactions, assetId).filter(
+  const entries = reportingTransactions(transactions, assetId).filter(
     (item) =>
       item.date <= asOf &&
       ((item.type === "income" && item.category === "salary") ||
@@ -87,12 +131,6 @@ export function livingBudget(
       a.createdAt.localeCompare(b.createdAt) ||
       a.id.localeCompare(b.id),
   );
-  const openingPayday =
-    asOf >= "2026-11-01" && (!assetId || assetId === DEFAULT_ASSET.id)
-      ? entries.findLast(
-          (item) => item.type === "income" && item.date <= "2026-11-01",
-        )?.date
-      : undefined;
   let cycle = {
     start: "",
     salary: 0,
@@ -114,20 +152,12 @@ export function livingBudget(
         currency,
       );
       if (savings === null) missing++;
-      const priorSpending =
-        item.date === openingPayday
-          ? convertedMinor(
-              { ...item, currency: "DKK", amountMinor: 785_842 },
-              currency,
-            )
-          : 0;
-      if (priorSpending === null) missing++;
       cycle = {
         start: item.date,
         salary: 0,
         savings: savings ?? 0,
         previousDeficit,
-        priorSpending: priorSpending ?? 0,
+        priorSpending: 0,
         expense: 0,
       };
     }
@@ -135,6 +165,7 @@ export function livingBudget(
     const amount = convertedMinor(item, currency);
     if (amount === null) missing++;
     else if (item.type === "income") cycle.salary += amount;
+    else if (item.id === INITIAL_SPENDING_ID) cycle.priorSpending += amount;
     else cycle.expense += amount;
   }
   if (!cycle.start || (period && !cycle.start.startsWith(period))) return null;

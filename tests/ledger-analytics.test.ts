@@ -6,6 +6,7 @@ import {
   categoryBreakdown,
   livingBudget,
   periodTransactions,
+  reportingTransactions,
   withInitialSalary,
 } from "../src/lib/ledger-analytics.ts";
 
@@ -33,6 +34,40 @@ const salary = (
   date,
   amountMinor,
   ...overrides,
+});
+
+test("startup spending appears as other in November reports without adding saved transactions or deducting twice", () => {
+  const transactions = [
+    expense("food", { date: "2026-11-08", amountMinor: 10_000 }),
+    expense("other", { date: "2026-11-09", category: "other", amountMinor: 20_000 }),
+    expense("december", { date: "2026-12-01", amountMinor: 1_000 }),
+  ];
+  const original = structuredClone(transactions);
+  const reporting = reportingTransactions(transactions);
+  const november = periodTransactions(reporting, "2026-11", "month");
+  assert.equal(totals(november, "DKK").expense, 815_842);
+  const breakdown = categoryBreakdown(november, "DKK", "expense");
+  assert.equal(breakdown.total, 815_842);
+  assert.equal(breakdown.items.find(item => item.category === "other")?.amount, 805_842);
+  assert.equal(categoryBreakdown(november.filter(item => item.category === "other"), "DKK", "expense").total, 805_842);
+  assert.equal(cashflowTrend(november, "DKK", "2026-11", "month").points[0].expense, 785_842);
+  assert.equal(totals(november, "USD").expense, 163_168);
+  assert.equal(totals(periodTransactions(reporting, "2026-10", "month"), "DKK").expense, 0);
+  assert.equal(totals(periodTransactions(reporting, "2026-12", "month"), "DKK").expense, 1_000);
+  assert.equal(totals(periodTransactions(reporting, "2027-11", "month"), "DKK").expense, 0);
+  assert.equal(totals(periodTransactions(reporting, "2026-11", "year"), "DKK").expense, 816_842);
+  assert.deepEqual(reportingTransactions(reporting), reporting);
+  assert.equal(periodTransactions(transactions, "2026-11", "month").length, 2);
+  assert.equal(totals(transactions, "DKK").balance, -31_000);
+  assert.deepEqual(transactions, original);
+  const budget = livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!;
+  assert.equal(budget.expense, 30_000);
+  assert.equal(budget.priorSpending, 785_842);
+  assert.equal(budget.remaining, 1_099_196);
+  assert.deepEqual(livingBudget(reporting, "DKK", "2026-11-30", "", "2026-11"), budget);
+  assert.deepEqual(reportingTransactions(transactions, "asset-savings"), transactions);
+  const withActualSalary = reportingTransactions([salary("2026-10-30")]);
+  assert.equal(totals(periodTransactions(withActualSalary, "2026-11", "month"), "DKK").expense, 785_842);
 });
 
 test("the pre-recorded living expense applies once in November 2026 and only to the main budget", () => {
@@ -75,7 +110,7 @@ test("switching months changes income and living budget while preserving the ove
     expense("bonus", { date: "2026-12-02", type: "income", amountMinor: 20_000 }),
   ];
   const original = structuredClone(transactions);
-  const reporting = withInitialSalary(transactions);
+  const reporting = reportingTransactions(transactions);
   assert.equal(totals(periodTransactions(reporting, "2026-10", "month"), "DKK").income, 0);
   assert.equal(totals(periodTransactions(reporting, "2026-11", "month"), "DKK").income, 2_415_038);
   assert.equal(totals(periodTransactions(reporting, "2026-12", "month"), "DKK").income, 2_620_000);
@@ -93,7 +128,7 @@ test("switching months changes income and living budget while preserving the ove
 
 test("the initial income is counted once and an empty month or year never reuses its budget", () => {
   const transactions = [expense("november", { date: "2026-11-08", amountMinor: 100_038 })];
-  const reporting = withInitialSalary(transactions);
+  const reporting = reportingTransactions(transactions);
   assert.deepEqual(withInitialSalary(reporting), reporting);
   assert.equal(livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!.remaining, 1_029_158);
   assert.equal(livingBudget(transactions, "DKK", "2026-12-31", "", "2026-12"), null);

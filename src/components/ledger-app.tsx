@@ -74,7 +74,7 @@ import {
 import {
   livingBudget,
   periodTransactions,
-  withInitialSalary,
+  reportingTransactions,
   type PeriodMode,
 } from "@/lib/ledger-analytics";
 import LedgerCharts from "./ledger-charts";
@@ -1599,7 +1599,7 @@ export default function LedgerApp() {
     );
   const currency = ledger.displayCurrency;
   const summaryPeriod = periodTransactions(
-    withInitialSalary(scopedTransactions, activeAssetId),
+    reportingTransactions(scopedTransactions, activeAssetId),
     month,
     periodMode,
   );
