@@ -34,6 +34,52 @@ const salary = (
   ...overrides,
 });
 
+test("the October 2026 salary funds November living expenses without adding a transaction", () => {
+  const initial = livingBudget([], "DKK", "2026-11-01")!;
+  assert.equal(initial.start, "2026-11-01");
+  assert.equal(initial.salary, 2_415_038);
+  assert.equal(initial.savings, 500_000);
+  assert.equal(initial.previousDeficit, 0);
+  assert.equal(initial.remaining, 1_915_038);
+  assert.equal(livingBudget([], "DKK", "2026-10-31"), null);
+
+  const transactions = [expense("november", { date: "2026-11-08", amountMinor: 100_038 })];
+  const original = structuredClone(transactions);
+  assert.equal(livingBudget(transactions, "DKK", "2026-11-10")!.remaining, 1_815_000);
+  assert.deepEqual(transactions, original);
+  assert.equal(livingBudget(transactions, "DKK", "2026-11-10", "default")!.remaining, 1_815_000);
+  assert.equal(livingBudget([], "DKK", "2026-11-10", "asset-savings"), null);
+
+  const usd = livingBudget(transactions, "USD", "2026-11-10")!;
+  assert.equal(usd.salary, 483_008);
+  assert.equal(usd.savings, 100_000);
+  assert.equal(usd.remaining, 363_000);
+  assert.equal(livingBudget(transactions, "EUR", "2026-11-10")!.remaining, null);
+});
+
+test("a recorded October salary replaces the initial amount and November salary starts a new period", () => {
+  const novemberExpense = expense("november", { date: "2026-11-08", amountMinor: 2_100_000 });
+  const actualOctober = livingBudget([
+    salary("2026-10-30", 2_500_000),
+    novemberExpense,
+  ], "DKK", "2026-11-10")!;
+  assert.equal(actualOctober.start, "2026-10-30");
+  assert.equal(actualOctober.salary, 2_500_000);
+  assert.equal(actualOctober.remaining, -100_000);
+
+  const transactions = [novemberExpense, salary("2026-11-27", 2_500_000)];
+  const beforePayday = livingBudget(transactions, "DKK", "2026-11-26")!;
+  assert.equal(beforePayday.salary, 2_415_038);
+  assert.equal(beforePayday.remaining, -184_962);
+  assert.equal(beforePayday.nextPayday, "2026-11-27");
+  const afterPayday = livingBudget(transactions, "DKK", "2026-11-27")!;
+  assert.equal(afterPayday.start, "2026-11-27");
+  assert.equal(afterPayday.salary, 2_500_000);
+  assert.equal(afterPayday.previousDeficit, 184_962);
+  assert.equal(afterPayday.expense, 0);
+  assert.equal(afterPayday.remaining, 1_815_038);
+});
+
 test("living expenses run from payday and deduct savings and only the prior deficit", () => {
   const transactions = [
     salary("2023-12-25"),

@@ -1606,7 +1606,12 @@ export default function LedgerApp() {
       : month === currentDate.slice(0, 7)
         ? currentDate
         : `${month}-${new Date(Number(month.slice(0, 4)), Number(month.slice(5)), 0).getDate()}`;
-  const budget = livingBudget(scopedTransactions, currency, budgetAsOf);
+  const budget = livingBudget(
+    scopedTransactions,
+    currency,
+    budgetAsOf,
+    activeAssetId,
+  );
   const matching = period.filter(
     (item) =>
       (!selectedCategories.length ||

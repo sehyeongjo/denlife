@@ -1,4 +1,9 @@
-import { convertedMinor, isManagement, type Transaction } from "./ledger.ts";
+import {
+  DEFAULT_ASSET,
+  convertedMinor,
+  isManagement,
+  type Transaction,
+} from "./ledger.ts";
 
 export type PeriodMode = "month" | "year";
 
@@ -20,21 +25,54 @@ export function livingBudget(
   transactions: Transaction[],
   currency: string,
   asOf: string,
+  assetId = "",
 ) {
-  const entries = transactions
-    .filter(
-      (item) =>
-        item.date <= asOf &&
-        ((item.type === "income" && item.category === "salary") ||
-          (item.type === "expense" && !isManagement(item))),
-    )
-    .sort(
-      (a, b) =>
-        a.date.localeCompare(b.date) ||
-        Number(b.type === "income") - Number(a.type === "income") ||
-        a.createdAt.localeCompare(b.createdAt) ||
-        a.id.localeCompare(b.id),
-    );
+  const entries = transactions.filter(
+    (item) =>
+      item.date <= asOf &&
+      ((item.type === "income" && item.category === "salary") ||
+        (item.type === "expense" && !isManagement(item))),
+  );
+  const initialDate = "2026-11-01";
+  if (
+    asOf >= initialDate &&
+    (!assetId || assetId === DEFAULT_ASSET.id) &&
+    !entries.some((item) => item.type === "income" && item.date <= initialDate)
+  ) {
+    // shortcut: use the first recorded FX for the initial salary; an actual October salary entry supplies its own rate.
+    const firstEntry = transactions
+      .filter((item) => item.date >= initialDate && item.date <= asOf)
+      .sort(
+        (a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+      )[0];
+    entries.push({
+      id: "initial-salary-2026-10",
+      assetId: DEFAULT_ASSET.id,
+      type: "income",
+      category: "salary",
+      title: "2026년 10월 급여 · 생활비 초기값",
+      date: initialDate,
+      createdAt: `${initialDate}T00:00:00Z`,
+      amountMinor: 2_415_038,
+      currency: "DKK",
+      note: "",
+      fx: firstEntry?.fx ?? {
+        base: "DKK",
+        rates: { DKK: 1 },
+        dates: { DKK: initialDate },
+        fetchedAt: `${initialDate}T00:00:00Z`,
+        source: "manual",
+      },
+    });
+  }
+  entries.sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      Number(b.type === "income") - Number(a.type === "income") ||
+      a.createdAt.localeCompare(b.createdAt) ||
+      a.id.localeCompare(b.id),
+  );
   let cycle = {
     start: "",
     salary: 0,
