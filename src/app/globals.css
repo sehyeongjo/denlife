@@ -761,6 +761,17 @@ svg {
     calc(24px + env(safe-area-inset-bottom))
     max(22px, env(safe-area-inset-left));
 }
+.modal.budget-info-modal {
+  width: calc(100% - 32px);
+  max-width: 480px;
+  height: auto;
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  border-radius: 24px;
+}
+.budget-info-modal .modal-inner {
+  min-height: 0;
+}
 .modal-heading {
   display: flex;
   align-items: center;

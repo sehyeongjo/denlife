@@ -2260,7 +2260,11 @@ export default function LedgerApp() {
         ))}
       </nav>
       {showBudgetInfo && (
-        <Modal title="생활비 잔액 안내" close={() => setShowBudgetInfo(false)}>
+        <Modal
+          title="생활비 잔액 안내"
+          className="budget-info-modal"
+          close={() => setShowBudgetInfo(false)}
+        >
           <p className="footnote">
             {!budget ? (
               "선택한 기간의 급여가 없어요. 급여 카테고리로 월급을 등록해 주세요."
