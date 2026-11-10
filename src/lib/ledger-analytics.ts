@@ -87,11 +87,18 @@ export function livingBudget(
       a.createdAt.localeCompare(b.createdAt) ||
       a.id.localeCompare(b.id),
   );
+  const openingPayday =
+    asOf >= "2026-11-01" && (!assetId || assetId === DEFAULT_ASSET.id)
+      ? entries.findLast(
+          (item) => item.type === "income" && item.date <= "2026-11-01",
+        )?.date
+      : undefined;
   let cycle = {
     start: "",
     salary: 0,
     savings: 0,
     previousDeficit: 0,
+    priorSpending: 0,
     expense: 0,
   };
   let missing = 0;
@@ -99,18 +106,28 @@ export function livingBudget(
     if (item.type === "income" && item.date !== cycle.start) {
       const previousDeficit = Math.max(
         0,
-        cycle.expense + cycle.savings + cycle.previousDeficit - cycle.salary,
+        cycle.expense + cycle.priorSpending + cycle.savings +
+          cycle.previousDeficit - cycle.salary,
       );
       const savings = convertedMinor(
         { ...item, currency: "DKK", amountMinor: 500_000 },
         currency,
       );
       if (savings === null) missing++;
+      const priorSpending =
+        item.date === openingPayday
+          ? convertedMinor(
+              { ...item, currency: "DKK", amountMinor: 785_842 },
+              currency,
+            )
+          : 0;
+      if (priorSpending === null) missing++;
       cycle = {
         start: item.date,
         salary: 0,
         savings: savings ?? 0,
         previousDeficit,
+        priorSpending: priorSpending ?? 0,
         expense: 0,
       };
     }
@@ -135,7 +152,7 @@ export function livingBudget(
     ...cycle,
     nextPayday,
     budget: missing ? null : budget,
-    remaining: missing ? null : budget - cycle.expense,
+    remaining: missing ? null : budget - cycle.expense - cycle.priorSpending,
   };
 }
 

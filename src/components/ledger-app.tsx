@@ -2277,7 +2277,11 @@ export default function LedgerApp() {
                 <br />
                 월급 {money(budget.salary, currency)} − 적금{" "}
                 {money(budget.savings, currency)} − 직전 기간 적자{" "}
-                {money(budget.previousDeficit, currency)} − 생활비 지출{" "}
+                {money(budget.previousDeficit, currency)}
+                {budget.priorSpending > 0 && (
+                  <> − 기록 전 사용액 {money(budget.priorSpending, currency)}</>
+                )}
+                {" − 생활비 지출 "}
                 {money(budget.expense, currency)} {currency}
                 <br />
                 적금은 매 급여 기간 5,000 DKK를 차감하고, 남은 생활비는

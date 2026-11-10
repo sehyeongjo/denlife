@@ -35,6 +35,38 @@ const salary = (
   ...overrides,
 });
 
+test("the pre-recorded living expense applies once in November 2026 and only to the main budget", () => {
+  const transactions = [
+    salary("2026-10-01"),
+    salary("2026-11-01"),
+    expense("november", { date: "2026-11-09" }),
+    salary("2026-12-01"),
+    salary("2027-11-01"),
+  ];
+  const original = structuredClone(transactions);
+  const october = livingBudget(transactions, "DKK", "2026-10-31", "", "2026-10")!;
+  assert.equal(october.priorSpending, 0);
+  assert.equal(october.remaining, 1_500_000);
+  const november = livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!;
+  assert.equal(november.priorSpending, 785_842);
+  assert.equal(november.expense, 10_000);
+  assert.equal(november.remaining, 704_158);
+  for (const month of ["2026-12", "2027-11"]) {
+    const result = livingBudget(transactions, "DKK", `${month}-30`, "", month)!;
+    assert.equal(result.priorSpending, 0);
+    assert.equal(result.previousDeficit, 0);
+    assert.equal(result.remaining, 1_500_000);
+  }
+  const otherAsset = livingBudget(
+    transactions.map((item) => ({ ...item, assetId: "asset-savings" })),
+    "DKK", "2026-11-30", "asset-savings", "2026-11",
+  )!;
+  assert.equal(otherAsset.priorSpending, 0);
+  assert.equal(otherAsset.remaining, 1_490_000);
+  assert.equal(totals(transactions, "DKK").expense, 10_000);
+  assert.deepEqual(transactions, original);
+});
+
 test("switching months changes income and living budget while preserving the overall balance", () => {
   const transactions = [
     expense("november", { date: "2026-11-08", amountMinor: 2_100_000 }),
@@ -49,9 +81,10 @@ test("switching months changes income and living budget while preserving the ove
   assert.equal(totals(periodTransactions(reporting, "2026-12", "month"), "DKK").income, 2_620_000);
   const november = livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!;
   const december = livingBudget(transactions, "DKK", "2026-12-31", "", "2026-12")!;
-  assert.equal(november.remaining, -184_962);
-  assert.equal(december.previousDeficit, 184_962);
-  assert.equal(december.remaining, 1_815_038);
+  assert.equal(november.remaining, -970_804);
+  assert.equal(december.priorSpending, 0);
+  assert.equal(december.previousDeficit, 970_804);
+  assert.equal(december.remaining, 1_029_196);
   assert.equal(livingBudget(transactions, "DKK", "2027-01-31", "", "2027-01"), null);
   assert.equal(totals(periodTransactions(reporting, "2027-01", "month"), "DKK").income, 0);
   assert.equal(totals(transactions, "DKK").balance, 420_000);
@@ -62,10 +95,10 @@ test("the initial income is counted once and an empty month or year never reuses
   const transactions = [expense("november", { date: "2026-11-08", amountMinor: 100_038 })];
   const reporting = withInitialSalary(transactions);
   assert.deepEqual(withInitialSalary(reporting), reporting);
-  assert.equal(livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!.remaining, 1_815_000);
+  assert.equal(livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!.remaining, 1_029_158);
   assert.equal(livingBudget(transactions, "DKK", "2026-12-31", "", "2026-12"), null);
   assert.equal(totals(periodTransactions(reporting, "2026-12", "month"), "DKK").income, 0);
-  assert.equal(livingBudget(transactions, "DKK", "2026-12-31", "", "2026")!.remaining, 1_815_000);
+  assert.equal(livingBudget(transactions, "DKK", "2026-12-31", "", "2026")!.remaining, 1_029_158);
   assert.equal(livingBudget(transactions, "DKK", "2027-12-31", "", "2027"), null);
   assert.equal(totals(periodTransactions(reporting, "2026-11", "year"), "DKK").income, 2_415_038);
   assert.equal(totals(periodTransactions(reporting, "2027-11", "year"), "DKK").income, 0);
@@ -81,20 +114,22 @@ test("the October 2026 salary funds November living expenses without adding a tr
   assert.equal(initial.salary, 2_415_038);
   assert.equal(initial.savings, 500_000);
   assert.equal(initial.previousDeficit, 0);
-  assert.equal(initial.remaining, 1_915_038);
+  assert.equal(initial.priorSpending, 785_842);
+  assert.equal(initial.remaining, 1_129_196);
   assert.equal(livingBudget([], "DKK", "2026-10-31"), null);
 
   const transactions = [expense("november", { date: "2026-11-08", amountMinor: 100_038 })];
   const original = structuredClone(transactions);
-  assert.equal(livingBudget(transactions, "DKK", "2026-11-10")!.remaining, 1_815_000);
+  assert.equal(livingBudget(transactions, "DKK", "2026-11-10")!.remaining, 1_029_158);
   assert.deepEqual(transactions, original);
-  assert.equal(livingBudget(transactions, "DKK", "2026-11-10", "default")!.remaining, 1_815_000);
+  assert.equal(livingBudget(transactions, "DKK", "2026-11-10", "default")!.remaining, 1_029_158);
   assert.equal(livingBudget([], "DKK", "2026-11-10", "asset-savings"), null);
 
   const usd = livingBudget(transactions, "USD", "2026-11-10")!;
   assert.equal(usd.salary, 483_008);
   assert.equal(usd.savings, 100_000);
-  assert.equal(usd.remaining, 363_000);
+  assert.equal(usd.priorSpending, 157_168);
+  assert.equal(usd.remaining, 205_832);
   assert.equal(livingBudget(transactions, "EUR", "2026-11-10")!.remaining, null);
 });
 
@@ -106,19 +141,20 @@ test("a recorded October salary replaces the initial amount and November salary 
   ], "DKK", "2026-11-10")!;
   assert.equal(actualOctober.start, "2026-10-30");
   assert.equal(actualOctober.salary, 2_500_000);
-  assert.equal(actualOctober.remaining, -100_000);
+  assert.equal(actualOctober.remaining, -885_842);
 
   const transactions = [novemberExpense, salary("2026-11-27", 2_500_000)];
   const beforePayday = livingBudget(transactions, "DKK", "2026-11-26")!;
   assert.equal(beforePayday.salary, 2_415_038);
-  assert.equal(beforePayday.remaining, -184_962);
+  assert.equal(beforePayday.remaining, -970_804);
   assert.equal(beforePayday.nextPayday, "2026-11-27");
   const afterPayday = livingBudget(transactions, "DKK", "2026-11-27")!;
   assert.equal(afterPayday.start, "2026-11-27");
   assert.equal(afterPayday.salary, 2_500_000);
-  assert.equal(afterPayday.previousDeficit, 184_962);
+  assert.equal(afterPayday.priorSpending, 0);
+  assert.equal(afterPayday.previousDeficit, 970_804);
   assert.equal(afterPayday.expense, 0);
-  assert.equal(afterPayday.remaining, 1_815_038);
+  assert.equal(afterPayday.remaining, 1_029_196);
 });
 
 test("living expenses run from payday and deduct savings and only the prior deficit", () => {
@@ -141,6 +177,7 @@ test("living expenses run from payday and deduct savings and only the prior defi
     salary: 2_000_000,
     savings: 500_000,
     previousDeficit: 200_000,
+    priorSpending: 0,
     expense: 300_000,
     budget: 1_300_000,
     remaining: 1_000_000,
