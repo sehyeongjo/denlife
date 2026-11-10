@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { demoTransactions, type Transaction } from "../src/lib/ledger.ts";
+import { demoTransactions, totals, type Transaction } from "../src/lib/ledger.ts";
 import {
   cashflowTrend,
   categoryBreakdown,
   livingBudget,
   periodTransactions,
+  withInitialSalary,
 } from "../src/lib/ledger-analytics.ts";
 
 const base = demoTransactions("2024-02")[1];
@@ -32,6 +33,46 @@ const salary = (
   date,
   amountMinor,
   ...overrides,
+});
+
+test("switching months changes income and living budget while preserving the overall balance", () => {
+  const transactions = [
+    expense("november", { date: "2026-11-08", amountMinor: 2_100_000 }),
+    salary("2026-12-01", 2_600_000),
+    expense("december", { date: "2026-12-02", amountMinor: 100_000 }),
+    expense("bonus", { date: "2026-12-02", type: "income", amountMinor: 20_000 }),
+  ];
+  const original = structuredClone(transactions);
+  const reporting = withInitialSalary(transactions);
+  assert.equal(totals(periodTransactions(reporting, "2026-10", "month"), "DKK").income, 0);
+  assert.equal(totals(periodTransactions(reporting, "2026-11", "month"), "DKK").income, 2_415_038);
+  assert.equal(totals(periodTransactions(reporting, "2026-12", "month"), "DKK").income, 2_620_000);
+  const november = livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!;
+  const december = livingBudget(transactions, "DKK", "2026-12-31", "", "2026-12")!;
+  assert.equal(november.remaining, -184_962);
+  assert.equal(december.previousDeficit, 184_962);
+  assert.equal(december.remaining, 1_815_038);
+  assert.equal(livingBudget(transactions, "DKK", "2027-01-31", "", "2027-01"), null);
+  assert.equal(totals(periodTransactions(reporting, "2027-01", "month"), "DKK").income, 0);
+  assert.equal(totals(transactions, "DKK").balance, 420_000);
+  assert.deepEqual(transactions, original);
+});
+
+test("the initial income is counted once and an empty month or year never reuses its budget", () => {
+  const transactions = [expense("november", { date: "2026-11-08", amountMinor: 100_038 })];
+  const reporting = withInitialSalary(transactions);
+  assert.deepEqual(withInitialSalary(reporting), reporting);
+  assert.equal(livingBudget(transactions, "DKK", "2026-11-30", "", "2026-11")!.remaining, 1_815_000);
+  assert.equal(livingBudget(transactions, "DKK", "2026-12-31", "", "2026-12"), null);
+  assert.equal(totals(periodTransactions(reporting, "2026-12", "month"), "DKK").income, 0);
+  assert.equal(livingBudget(transactions, "DKK", "2026-12-31", "", "2026")!.remaining, 1_815_000);
+  assert.equal(livingBudget(transactions, "DKK", "2027-12-31", "", "2027"), null);
+  assert.equal(totals(periodTransactions(reporting, "2026-11", "year"), "DKK").income, 2_415_038);
+  assert.equal(totals(periodTransactions(reporting, "2027-11", "year"), "DKK").income, 0);
+  assert.equal(categoryBreakdown(periodTransactions(reporting, "2026-11", "month"), "DKK", "income").total, 2_415_038);
+  assert.equal(cashflowTrend(reporting, "DKK", "2026-11", "month").points[0].income, 2_415_038);
+  assert.equal(withInitialSalary([], "asset-savings").length, 0);
+  assert.equal(withInitialSalary([salary("2026-10-30")]).length, 1);
 });
 
 test("the October 2026 salary funds November living expenses without adding a transaction", () => {

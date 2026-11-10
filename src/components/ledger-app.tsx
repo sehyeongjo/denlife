@@ -73,6 +73,7 @@ import {
 import {
   livingBudget,
   periodTransactions,
+  withInitialSalary,
   type PeriodMode,
 } from "@/lib/ledger-analytics";
 import LedgerCharts from "./ledger-charts";
@@ -1595,7 +1596,12 @@ export default function LedgerApp() {
       </main>
     );
   const currency = ledger.displayCurrency;
-  const summary = totals(period, currency, activeAssetId);
+  const summaryPeriod = periodTransactions(
+    withInitialSalary(scopedTransactions, activeAssetId),
+    month,
+    periodMode,
+  );
+  const summary = totals(summaryPeriod, currency, activeAssetId);
   const overall = totals(scopedTransactions, currency, activeAssetId);
   const currentDate = today();
   const budgetAsOf =
@@ -1611,29 +1617,29 @@ export default function LedgerApp() {
     currency,
     budgetAsOf,
     activeAssetId,
+    periodMode === "year" ? month.slice(0, 4) : month,
   );
-  const matching = period.filter(
-    (item) =>
-      (!selectedCategories.length ||
-        (item.type !== "transfer" &&
-          selectedCategories.includes(item.category))) &&
-      [
-        item.title,
-        item.note,
-        item.currency,
-        item.type === "transfer"
-          ? "이체"
-          : categoryInfo(item.category, ledger.customCategories).label,
-        ...ledger.assets
-          .filter(
-            (asset) => asset.id === item.assetId || asset.id === item.toAssetId,
-          )
-          .map((asset) => asset.label),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-  );
+  const matches = (item: Transaction) =>
+    (!selectedCategories.length ||
+      (item.type !== "transfer" &&
+        selectedCategories.includes(item.category))) &&
+    [
+      item.title,
+      item.note,
+      item.currency,
+      item.type === "transfer"
+        ? "이체"
+        : categoryInfo(item.category, ledger.customCategories).label,
+      ...ledger.assets
+        .filter(
+          (asset) => asset.id === item.assetId || asset.id === item.toAssetId,
+        )
+        .map((asset) => asset.label),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query.toLowerCase());
+  const matching = period.filter(matches);
   const filtered = matching.filter(
     (item) =>
       filter === "all" ||
@@ -1994,7 +2000,7 @@ export default function LedgerApp() {
               </div>
               <p className="footnote">
                 {!budget ? (
-                  "급여 카테고리로 월급을 등록하면 생활비 잔액을 계산해요."
+                  "선택한 기간의 급여가 없어요. 급여 카테고리로 월급을 등록해 주세요."
                 ) : budget.remaining === null ? (
                   "환산 환율이 없는 항목이 있어 생활비 잔액을 계산할 수 없어요."
                 ) : (
@@ -2134,7 +2140,7 @@ export default function LedgerApp() {
               </p>
             ) : (
               <LedgerCharts
-                transactions={matching}
+                transactions={summaryPeriod.filter(matches)}
                 currency={currency}
                 customCategories={ledger.customCategories}
                 month={month}

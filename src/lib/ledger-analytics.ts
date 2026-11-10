@@ -21,32 +21,31 @@ export function periodTransactions(
     );
 }
 
-export function livingBudget(
+export function withInitialSalary(
   transactions: Transaction[],
-  currency: string,
-  asOf: string,
   assetId = "",
-) {
-  const entries = transactions.filter(
-    (item) =>
-      item.date <= asOf &&
-      ((item.type === "income" && item.category === "salary") ||
-        (item.type === "expense" && !isManagement(item))),
-  );
+): Transaction[] {
   const initialDate = "2026-11-01";
   if (
-    asOf >= initialDate &&
-    (!assetId || assetId === DEFAULT_ASSET.id) &&
-    !entries.some((item) => item.type === "income" && item.date <= initialDate)
-  ) {
-    // shortcut: use the first recorded FX for the initial salary; an actual October salary entry supplies its own rate.
-    const firstEntry = transactions
-      .filter((item) => item.date >= initialDate && item.date <= asOf)
-      .sort(
-        (a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-      )[0];
-    entries.push({
+    (assetId && assetId !== DEFAULT_ASSET.id) ||
+    transactions.some(
+      (item) =>
+        item.type === "income" &&
+        item.category === "salary" &&
+        item.date <= initialDate,
+    )
+  )
+    return transactions;
+  // shortcut: use the first recorded FX for the initial salary; an actual October salary entry supplies its own rate.
+  const firstEntry = transactions
+    .filter((item) => item.date >= initialDate)
+    .sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    )[0];
+  return [
+    ...transactions,
+    {
       id: "initial-salary-2026-10",
       assetId: DEFAULT_ASSET.id,
       type: "income",
@@ -64,8 +63,23 @@ export function livingBudget(
         fetchedAt: `${initialDate}T00:00:00Z`,
         source: "manual",
       },
-    });
-  }
+    },
+  ];
+}
+
+export function livingBudget(
+  transactions: Transaction[],
+  currency: string,
+  asOf: string,
+  assetId = "",
+  period?: string,
+) {
+  const entries = withInitialSalary(transactions, assetId).filter(
+    (item) =>
+      item.date <= asOf &&
+      ((item.type === "income" && item.category === "salary") ||
+        (item.type === "expense" && !isManagement(item))),
+  );
   entries.sort(
     (a, b) =>
       a.date.localeCompare(b.date) ||
@@ -106,7 +120,7 @@ export function livingBudget(
     else if (item.type === "income") cycle.salary += amount;
     else cycle.expense += amount;
   }
-  if (!cycle.start) return null;
+  if (!cycle.start || (period && !cycle.start.startsWith(period))) return null;
   const budget = cycle.salary - cycle.savings - cycle.previousDeficit;
   const nextPayday = transactions
     .filter(
