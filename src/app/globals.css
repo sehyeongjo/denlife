@@ -310,9 +310,6 @@ svg {
   font-size: 17px;
   color: var(--secondary);
 }
-.balance-section > .footnote {
-  margin: -12px 0 20px;
-}
 .balance-amount {
   margin-top: 5px;
   font-size: clamp(30px, 9.5vw, 42px);
@@ -344,6 +341,15 @@ svg {
 .summary-lines > div > span {
   font-size: 16px;
   color: var(--muted);
+}
+.summary-label {
+  display: inline-flex;
+  align-items: center;
+}
+.summary-label .icon-button {
+  width: 44px;
+  height: 44px;
+  margin-block: -10px;
 }
 .summary-lines strong {
   font-size: 18px;

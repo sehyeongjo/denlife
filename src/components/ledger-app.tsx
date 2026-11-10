@@ -21,6 +21,7 @@ import {
   Download,
   Ellipsis,
   House,
+  Info,
   List,
   LockKeyhole,
   LogOut,
@@ -1455,6 +1456,7 @@ export default function LedgerApp() {
   const [editorCategory, setEditorCategory] = useState<Category>("food");
   const [editor, setEditor] = useState<Transaction | null | undefined>();
   const [detail, setDetail] = useState<Transaction | null>(null);
+  const [showBudgetInfo, setShowBudgetInfo] = useState(false);
   const [toast, setToast] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
@@ -1982,7 +1984,18 @@ export default function LedgerApp() {
                   </strong>
                 </div>
                 <div>
-                  <span>생활비 잔액</span>
+                  <span className="summary-label">
+                    생활비 잔액
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="생활비 잔액 계산 안내"
+                      aria-haspopup="dialog"
+                      onClick={() => setShowBudgetInfo(true)}
+                    >
+                      <Info size={18} aria-hidden="true" />
+                    </button>
+                  </span>
                   <strong>
                     {budget?.remaining != null
                       ? money(budget.remaining, currency)
@@ -1998,37 +2011,6 @@ export default function LedgerApp() {
                   </strong>
                 </div>
               </div>
-              <p className="footnote">
-                {!budget ? (
-                  "선택한 기간의 급여가 없어요. 급여 카테고리로 월급을 등록해 주세요."
-                ) : budget.remaining === null ? (
-                  "환산 환율이 없는 항목이 있어 생활비 잔액을 계산할 수 없어요."
-                ) : (
-                  <>
-                    {budget.start}부터{" "}
-                    {budget.nextPayday
-                      ? `${budget.nextPayday} 급여 전까지`
-                      : "다음 월급일 전까지"}
-                    {" · "}
-                    {budgetAsOf} 기준
-                    <br />
-                    월급 {money(budget.salary, currency)} − 적금{" "}
-                    {money(budget.savings, currency)} − 직전 기간 적자{" "}
-                    {money(budget.previousDeficit, currency)} − 생활비 지출{" "}
-                    {money(budget.expense, currency)} {currency}
-                    <br />
-                    적금은 매 급여 기간 5,000 DKK를 차감하고, 남은 생활비는
-                    이월하지 않아요.
-                  </>
-                )}
-              </p>
-              <p className="footnote">
-                {activeAssetId ? "자산 잔액" : "전체 잔액"}은 모든 기간 내역과
-                관리항목을 포함해요.
-                {overall.missing > 0
-                  ? ` 환산 환율이 없는 ${overall.missing}건은 제외했어요.`
-                  : ""}
-              </p>
               <button
                 className="button button-primary full-width"
                 onClick={() => openEditor()}
@@ -2277,6 +2259,41 @@ export default function LedgerApp() {
           </button>
         ))}
       </nav>
+      {showBudgetInfo && (
+        <Modal title="생활비 잔액 안내" close={() => setShowBudgetInfo(false)}>
+          <p className="footnote">
+            {!budget ? (
+              "선택한 기간의 급여가 없어요. 급여 카테고리로 월급을 등록해 주세요."
+            ) : budget.remaining === null ? (
+              "환산 환율이 없는 항목이 있어 생활비 잔액을 계산할 수 없어요."
+            ) : (
+              <>
+                {budget.start}부터{" "}
+                {budget.nextPayday
+                  ? `${budget.nextPayday} 급여 전까지`
+                  : "다음 월급일 전까지"}
+                {" · "}
+                {budgetAsOf} 기준
+                <br />
+                월급 {money(budget.salary, currency)} − 적금{" "}
+                {money(budget.savings, currency)} − 직전 기간 적자{" "}
+                {money(budget.previousDeficit, currency)} − 생활비 지출{" "}
+                {money(budget.expense, currency)} {currency}
+                <br />
+                적금은 매 급여 기간 5,000 DKK를 차감하고, 남은 생활비는
+                이월하지 않아요.
+              </>
+            )}
+          </p>
+          <p className="footnote">
+            {activeAssetId ? "자산 잔액" : "전체 잔액"}은 모든 기간 내역과
+            관리항목을 포함해요.
+            {overall.missing > 0
+              ? ` 환산 환율이 없는 ${overall.missing}건은 제외했어요.`
+              : ""}
+          </p>
+        </Modal>
+      )}
       {editor !== undefined && (
         <TransactionEditor
           transaction={editor}
