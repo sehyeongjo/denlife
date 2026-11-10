@@ -4,6 +4,7 @@ import { demoTransactions, type Transaction } from "../src/lib/ledger.ts";
 import {
   cashflowTrend,
   categoryBreakdown,
+  livingBudget,
   periodTransactions,
 } from "../src/lib/ledger-analytics.ts";
 
@@ -19,6 +20,143 @@ const expense = (
   amountMinor: 10000,
   fx: { ...base.fx, rates: { DKK: 1, USD: 0.2 } },
   ...overrides,
+});
+
+const salary = (
+  date: string,
+  amountMinor = 2_000_000,
+  overrides: Partial<Transaction> = {},
+) => expense(`salary-${date}`, {
+  type: "income",
+  category: "salary",
+  date,
+  amountMinor,
+  ...overrides,
+});
+
+test("living expenses run from payday and deduct savings and only the prior deficit", () => {
+  const transactions = [
+    salary("2023-12-25"),
+    expense("december", { date: "2024-01-24", amountMinor: 1_000_000 }),
+    salary("2024-01-25"),
+    expense("january", { date: "2024-02-24", amountMinor: 1_700_000 }),
+    salary("2024-02-25"),
+    expense("february", { date: "2024-03-01", amountMinor: 300_000 }),
+  ];
+  const december = livingBudget(transactions, "DKK", "2024-01-24")!;
+  assert.equal(december.remaining, 500_000);
+  assert.equal(december.nextPayday, "2024-01-25");
+  const january = livingBudget(transactions, "DKK", "2024-02-24")!;
+  assert.equal(january.previousDeficit, 0);
+  assert.equal(january.remaining, -200_000);
+  assert.deepEqual(livingBudget(transactions, "DKK", "2024-03-01"), {
+    start: "2024-02-25",
+    salary: 2_000_000,
+    savings: 500_000,
+    previousDeficit: 200_000,
+    expense: 300_000,
+    budget: 1_300_000,
+    remaining: 1_000_000,
+    nextPayday: undefined,
+  });
+});
+
+test("unpaid deficits carry forward until repaid and a later surplus is discarded", () => {
+  const transactions = [
+    salary("2024-01-25", 600_000),
+    expense("overspend", { date: "2024-01-26", amountMinor: 400_000 }),
+    salary("2024-02-25", 600_000),
+    salary("2024-03-25", 1_000_000),
+    salary("2024-04-25", 1_000_000),
+  ];
+  const february = livingBudget(transactions, "DKK", "2024-02-29")!;
+  assert.equal(february.previousDeficit, 300_000);
+  assert.equal(february.remaining, -200_000);
+  const march = livingBudget(transactions, "DKK", "2024-03-31")!;
+  assert.equal(march.previousDeficit, 200_000);
+  assert.equal(march.remaining, 300_000);
+  const april = livingBudget(transactions, "DKK", "2024-04-30")!;
+  assert.equal(april.previousDeficit, 0);
+  assert.equal(april.remaining, 500_000);
+});
+
+test("payday expenses belong to the new period and same-day salaries reserve savings once", () => {
+  const transactions = [
+    expense("payday-expense", { date: "2024-02-29", amountMinor: 100_000 }),
+    salary("2024-02-29", 1_000_000),
+    salary("2024-01-31"),
+    salary("2024-02-29", 1_000_000, { id: "second-salary" }),
+    expense("prior-day", { date: "2024-02-28", amountMinor: 1_800_000 }),
+    salary("2024-03-28"),
+    expense("future", { date: "2024-03-01", amountMinor: 700_000 }),
+  ];
+  const originalIds = transactions.map((item) => item.id);
+  const result = livingBudget(transactions, "DKK", "2024-02-29")!;
+  assert.equal(result.start, "2024-02-29");
+  assert.equal(result.salary, 2_000_000);
+  assert.equal(result.savings, 500_000);
+  assert.equal(result.previousDeficit, 300_000);
+  assert.equal(result.expense, 100_000);
+  assert.equal(result.remaining, 1_100_000);
+  assert.equal(result.nextPayday, "2024-03-28");
+  assert.deepEqual(transactions.map((item) => item.id), originalIds);
+  assert.equal(
+    livingBudget([...transactions].reverse(), "DKK", "2024-02-29")!.remaining,
+    result.remaining,
+  );
+});
+
+test("living budgets exclude other income, management, transfers and pre-payday expenses", () => {
+  const regular = [
+    salary("2024-02-25"),
+    expense("food", { date: "2024-02-26" }),
+  ];
+  const ignored = [
+    expense("before-salary", { date: "2024-02-24" }),
+    expense("other-income", { date: "2024-02-26", type: "income" }),
+    expense("management-income", {
+      date: "2024-02-26", type: "income", category: "management",
+    }),
+    expense("management-expense", { date: "2024-02-26", category: "management" }),
+    expense("transfer", {
+      date: "2024-02-26", type: "transfer", category: "management", toAssetId: "asset-cash",
+    }),
+    expense("salary-category-expense", {
+      date: "2024-02-24", category: "salary",
+    }),
+  ];
+  assert.deepEqual(
+    livingBudget([...regular, ...ignored], "DKK", "2024-02-29"),
+    livingBudget(regular, "DKK", "2024-02-29"),
+  );
+  assert.equal(livingBudget(ignored, "DKK", "2024-02-29"), null);
+  assert.equal(livingBudget([], "DKK", "2024-02-29"), null);
+  assert.equal(livingBudget([salary("2024-03-01")], "DKK", "2024-02-29"), null);
+});
+
+test("living budgets convert savings at the salary rate and expenses at their own rate", () => {
+  const transactions = [
+    salary("2024-02-25", 400_000, { currency: "USD" }),
+    expense("usd-expense", {
+      date: "2024-02-26", currency: "USD", amountMinor: 10_000,
+      fx: { ...base.fx, rates: { DKK: 1, USD: 0.25 } },
+    }),
+  ];
+  const result = livingBudget(transactions, "USD", "2024-02-29")!;
+  assert.equal(result.salary, 400_000);
+  assert.equal(result.savings, 100_000);
+  assert.equal(result.expense, 10_000);
+  assert.equal(result.remaining, 290_000);
+  assert.equal(livingBudget(transactions, "DKK", "2024-02-29")!.remaining, 1_460_000);
+  const missing = livingBudget(transactions, "EUR", "2024-02-29")!;
+  assert.equal(missing.budget, null);
+  assert.equal(missing.remaining, null);
+  const priorMissing = [
+    salary("2024-01-25"),
+    expense("missing", { date: "2024-01-26", currency: "EUR" }),
+    ...transactions,
+  ];
+  assert.equal(livingBudget(priorMissing, "DKK", "2024-02-29")!.remaining, null);
 });
 
 test("month and year views include only the requested period, newest first", () => {

@@ -16,6 +16,77 @@ export function periodTransactions(
     );
 }
 
+export function livingBudget(
+  transactions: Transaction[],
+  currency: string,
+  asOf: string,
+) {
+  const entries = transactions
+    .filter(
+      (item) =>
+        item.date <= asOf &&
+        ((item.type === "income" && item.category === "salary") ||
+          (item.type === "expense" && !isManagement(item))),
+    )
+    .sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        Number(b.type === "income") - Number(a.type === "income") ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    );
+  let cycle = {
+    start: "",
+    salary: 0,
+    savings: 0,
+    previousDeficit: 0,
+    expense: 0,
+  };
+  let missing = 0;
+  for (const item of entries) {
+    if (item.type === "income" && item.date !== cycle.start) {
+      const previousDeficit = Math.max(
+        0,
+        cycle.expense + cycle.savings + cycle.previousDeficit - cycle.salary,
+      );
+      const savings = convertedMinor(
+        { ...item, currency: "DKK", amountMinor: 500_000 },
+        currency,
+      );
+      if (savings === null) missing++;
+      cycle = {
+        start: item.date,
+        salary: 0,
+        savings: savings ?? 0,
+        previousDeficit,
+        expense: 0,
+      };
+    }
+    if (!cycle.start) continue;
+    const amount = convertedMinor(item, currency);
+    if (amount === null) missing++;
+    else if (item.type === "income") cycle.salary += amount;
+    else cycle.expense += amount;
+  }
+  if (!cycle.start) return null;
+  const budget = cycle.salary - cycle.savings - cycle.previousDeficit;
+  const nextPayday = transactions
+    .filter(
+      (item) =>
+        item.type === "income" &&
+        item.category === "salary" &&
+        item.date > asOf,
+    )
+    .map((item) => item.date)
+    .sort()[0];
+  return {
+    ...cycle,
+    nextPayday,
+    budget: missing ? null : budget,
+    remaining: missing ? null : budget - cycle.expense,
+  };
+}
+
 export function categoryBreakdown(
   transactions: Transaction[],
   currency: string,

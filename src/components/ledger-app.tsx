@@ -70,7 +70,11 @@ import {
   parseLedgerState,
   type LedgerState,
 } from "@/lib/ledger-sync";
-import { periodTransactions, type PeriodMode } from "@/lib/ledger-analytics";
+import {
+  livingBudget,
+  periodTransactions,
+  type PeriodMode,
+} from "@/lib/ledger-analytics";
 import LedgerCharts from "./ledger-charts";
 
 type Tab = "home" | "transactions" | "assets" | "settings";
@@ -1593,6 +1597,16 @@ export default function LedgerApp() {
   const currency = ledger.displayCurrency;
   const summary = totals(period, currency, activeAssetId);
   const overall = totals(scopedTransactions, currency, activeAssetId);
+  const currentDate = today();
+  const budgetAsOf =
+    periodMode === "year"
+      ? month.slice(0, 4) === currentDate.slice(0, 4)
+        ? currentDate
+        : `${month.slice(0, 4)}-12-31`
+      : month === currentDate.slice(0, 7)
+        ? currentDate
+        : `${month}-${new Date(Number(month.slice(0, 4)), Number(month.slice(5)), 0).getDate()}`;
+  const budget = livingBudget(scopedTransactions, currency, budgetAsOf);
   const matching = period.filter(
     (item) =>
       (!selectedCategories.length ||
@@ -1957,10 +1971,12 @@ export default function LedgerApp() {
                   </strong>
                 </div>
                 <div>
-                  <span>기간 잔액</span>
+                  <span>생활비 잔액</span>
                   <strong>
-                    {money(summary.income - summary.expense, currency)}
-                    <small>{currency}</small>
+                    {budget?.remaining != null
+                      ? money(budget.remaining, currency)
+                      : "—"}
+                    {budget?.remaining != null && <small>{currency}</small>}
                   </strong>
                 </div>
                 <div>
@@ -1972,7 +1988,32 @@ export default function LedgerApp() {
                 </div>
               </div>
               <p className="footnote">
-                잔액은 조회 자산의 모든 기간 내역과 관리항목을 포함해요.
+                {!budget ? (
+                  "급여 카테고리로 월급을 등록하면 생활비 잔액을 계산해요."
+                ) : budget.remaining === null ? (
+                  "환산 환율이 없는 항목이 있어 생활비 잔액을 계산할 수 없어요."
+                ) : (
+                  <>
+                    {budget.start}부터{" "}
+                    {budget.nextPayday
+                      ? `${budget.nextPayday} 급여 전까지`
+                      : "다음 월급일 전까지"}
+                    {" · "}
+                    {budgetAsOf} 기준
+                    <br />
+                    월급 {money(budget.salary, currency)} − 적금{" "}
+                    {money(budget.savings, currency)} − 직전 기간 적자{" "}
+                    {money(budget.previousDeficit, currency)} − 생활비 지출{" "}
+                    {money(budget.expense, currency)} {currency}
+                    <br />
+                    적금은 매 급여 기간 5,000 DKK를 차감하고, 남은 생활비는
+                    이월하지 않아요.
+                  </>
+                )}
+              </p>
+              <p className="footnote">
+                {activeAssetId ? "자산 잔액" : "전체 잔액"}은 모든 기간 내역과
+                관리항목을 포함해요.
                 {overall.missing > 0
                   ? ` 환산 환율이 없는 ${overall.missing}건은 제외했어요.`
                   : ""}
